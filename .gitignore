@@ -1,0 +1,33 @@
+# 環境變數與機密
+.env
+.env.local
+
+# Logs (保留 .gitkeep)
+logs/*
+!logs/.gitkeep
+*.log
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg
+*.egg-info/
+dist/
+build/
+wheels/
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Docker
+# (不忽略 docker/ 目錄本身, 僅忽略使用者自建的 .override)
+docker-compose.override.yaml

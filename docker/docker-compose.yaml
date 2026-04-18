@@ -1,0 +1,14 @@
+services:
+  app:
+    image: ring-of-hands:local
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    env_file:
+      - ../.env
+    environment:
+      PYTHONPATH: /app/src
+    volumes:
+      - ../logs:/app/logs
+    working_dir: /app
+    # 預設指令透過 run.sh 透傳; compose 本身不指定 command, 以 Dockerfile 的 CMD 為準.

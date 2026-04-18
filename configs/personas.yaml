@@ -1,0 +1,39 @@
+# pov_1 ~ pov_5 的 persona 模板. script-generator 會根據這些模板生成劇本.
+# pov_6 的 persona 在 configs/default.yaml 中獨立定義 (因其為真 Agent).
+
+personas:
+  - pov_id: 1
+    name: "新生"
+    description: "從無到有的玩家. 沒有任何前世記憶, 一切從零開始摸索."
+    traits:
+      - curious
+      - naive
+      - impulsive
+
+  - pov_id: 2
+    name: "追憶者"
+    description: "帶著 1 層前世記憶. 開始察覺某種循環感."
+    traits:
+      - cautious
+      - reflective
+
+  - pov_id: 3
+    name: "懷疑者"
+    description: "帶著 2 層前世記憶. 對環境與同伴的身份產生強烈懷疑."
+    traits:
+      - suspicious
+      - investigative
+
+  - pov_id: 4
+    name: "觀察者"
+    description: "帶著 3 層前世記憶. 熟習房間物件, 對按鈕與戒指規則逐漸形成假說."
+    traits:
+      - patient
+      - analytical
+
+  - pov_id: 5
+    name: "預知者"
+    description: "帶著 4 層前世記憶. 幾乎能預判其他 pov 的行為, 但尚未掌握拿戒指的正確規則."
+    traits:
+      - calculating
+      - slightly_desperate

@@ -1,0 +1,56 @@
+# 攜手之戒關卡的預設配置.
+# 任何欄位皆可被測試 fixture 覆寫; 正式執行以此檔為準.
+
+room_size: [10, 10]
+
+# 6 個 body 的起始位置 (grid 座標, x,y). 索引 0 對應 body_1.
+body_start_positions:
+  - [1, 1]
+  - [1, 8]
+  - [4, 1]
+  - [4, 8]
+  - [8, 1]
+  - [8, 8]
+
+# 6 個按鈕的位置. 索引 0 對應 button_1.
+button_positions:
+  - [2, 2]
+  - [2, 7]
+  - [5, 2]
+  - [5, 7]
+  - [7, 2]
+  - [7, 7]
+
+# 戒指位置 (房間中央).
+ring_position: [5, 5]
+
+# 時間與一致性.
+max_ticks: 50
+max_retries: 3
+
+# 訊息長度限制.
+max_speak_length: 512
+
+# 即時對話開關.
+enable_realtime_chat: true
+
+# LLM 呼叫 timeout (秒).
+llm_timeout_seconds: 30
+
+# LLM client 類型: "anthropic" 或 "fake".
+llm_client: "anthropic"
+
+# Project agent 模型 (亦可由環境變數 PROJECT_AGENT_MODEL 覆寫).
+project_agent_model: "claude-sonnet-4-7"
+
+# Dry-run fixture 路徑 (`--dry-run` 時載入).
+dry_run_fixture_path: "tests/fixtures/dry_run.yaml"
+
+# pov_6 persona (真 Agent).
+pov6_persona:
+  name: "被困的玩家"
+  description: "面對陌生房間, 戴著面具與特殊眼鏡, 不知道自己的號碼. 個性謹慎、擅長從細節推理."
+  traits:
+    - cautious
+    - observant
+    - analytical
