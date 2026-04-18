@@ -76,10 +76,8 @@ class TestStartupChecks:
         assert "claude CLI 不可執行" in str(excinfo.value)
 
     def test_cli_version_nonzero_raises(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+        self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        claude_home = tmp_path / ".claude"
-        claude_home.mkdir()
         monkeypatch.setattr(
             "ring_of_hands.llm.claude_cli_client.shutil.which",
             lambda p: p,
@@ -89,46 +87,12 @@ class TestStartupChecks:
             lambda *a, **kw: _fake_completed(returncode=1, stderr="err"),
         )
         with pytest.raises(ConfigValidationError) as excinfo:
-            ClaudeCLIClient(cli_path="claude", claude_home=claude_home)
+            ClaudeCLIClient(cli_path="claude")
         assert "退出碼 1" in str(excinfo.value)
 
-    def test_claude_home_missing_raises(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-    ) -> None:
-        monkeypatch.setattr(
-            "ring_of_hands.llm.claude_cli_client.shutil.which",
-            lambda p: p,
-        )
-        monkeypatch.setattr(
-            "ring_of_hands.llm.claude_cli_client.subprocess.run",
-            lambda *a, **kw: _fake_completed(stdout="1.0.0"),
-        )
-        with pytest.raises(ConfigValidationError) as excinfo:
-            ClaudeCLIClient(cli_path="claude", claude_home=tmp_path / "nope")
-        assert "請先執行 `claude login`" in str(excinfo.value)
-
-    def test_claude_home_is_file_raises(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-    ) -> None:
-        fake_home = tmp_path / ".claude"
-        fake_home.write_text("not a dir", encoding="utf-8")
-        monkeypatch.setattr(
-            "ring_of_hands.llm.claude_cli_client.shutil.which",
-            lambda p: p,
-        )
-        monkeypatch.setattr(
-            "ring_of_hands.llm.claude_cli_client.subprocess.run",
-            lambda *a, **kw: _fake_completed(stdout="1.0.0"),
-        )
-        with pytest.raises(ConfigValidationError) as excinfo:
-            ClaudeCLIClient(cli_path="claude", claude_home=fake_home)
-        assert "不是目錄" in str(excinfo.value)
-
     def test_env_reads_claude_cli_path(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+        self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        claude_home = tmp_path / ".claude"
-        claude_home.mkdir()
         captured: dict[str, Any] = {}
 
         def _which(p: str) -> str:
@@ -143,15 +107,23 @@ class TestStartupChecks:
             "ring_of_hands.llm.claude_cli_client.subprocess.run",
             lambda *a, **kw: _fake_completed(stdout="1.0.0"),
         )
-        client = ClaudeCLIClient(claude_home=claude_home)
+        client = ClaudeCLIClient()
         assert captured["which_arg"] == "/opt/claude"
         assert client  # 防止 unused-variable warning
 
-    def test_skip_startup_checks_for_testing(self, tmp_path: Path) -> None:
+    def test_skip_startup_checks_for_testing(self) -> None:
         """skip_startup_checks=True 允許在測試內建構而不驗 CLI 存在."""
         client = ClaudeCLIClient(
             cli_path="any",
-            claude_home=tmp_path / "does-not-exist",
+            skip_startup_checks=True,
+        )
+        assert client is not None
+
+    def test_claude_home_kwarg_is_ignored_for_compat(self) -> None:
+        """`claude_home` kwarg 仍接受但已不再驗證 (2026-04-18 後)."""
+        client = ClaudeCLIClient(
+            cli_path="any",
+            claude_home="/nonexistent/path",  # 故意指一個不存在的路徑.
             skip_startup_checks=True,
         )
         assert client is not None
@@ -164,10 +136,9 @@ class TestStartupChecks:
 
 class TestCallCommandConstruction:
     @pytest.fixture
-    def client(self, tmp_path: Path) -> ClaudeCLIClient:
+    def client(self) -> ClaudeCLIClient:
         return ClaudeCLIClient(
             cli_path="claude",
-            claude_home=tmp_path,
             skip_startup_checks=True,
         )
 
@@ -197,11 +168,32 @@ class TestCallCommandConstruction:
         # --output-format stream-json
         idx_fmt = args.index("--output-format")
         assert args[idx_fmt + 1] == "stream-json"
+        # --verbose MUST 存在 (CLI 硬性規定 stream-json 必須搭 --verbose).
+        assert "--verbose" in args
         # --model claude-sonnet-4-7
         idx_model = args.index("--model")
         assert args[idx_model + 1] == "claude-sonnet-4-7"
 
         assert resp.text == "done"
+
+    def test_verbose_flag_required_with_stream_json(
+        self, client: ClaudeCLIClient
+    ) -> None:
+        """stream-json 輸出格式 MUST 搭配 --verbose; 即使沒有 --model 也要有."""
+        captured: dict[str, Any] = {}
+
+        def _fake_run(args, **kwargs):
+            captured["args"] = args
+            return _fake_completed(stdout=_cli_result_event("ok"))
+
+        with patch(
+            "ring_of_hands.llm.claude_cli_client.subprocess.run", _fake_run
+        ):
+            client.call(_make_request(model=""))
+
+        assert "--verbose" in captured["args"]
+        idx_fmt = captured["args"].index("--output-format")
+        assert captured["args"][idx_fmt + 1] == "stream-json"
 
     def test_omits_model_flag_when_empty(
         self, client: ClaudeCLIClient
@@ -279,10 +271,9 @@ class TestCallCommandConstruction:
 
 class TestCallErrorMapping:
     @pytest.fixture
-    def client(self, tmp_path: Path) -> ClaudeCLIClient:
+    def client(self) -> ClaudeCLIClient:
         return ClaudeCLIClient(
             cli_path="claude",
-            claude_home=tmp_path,
             skip_startup_checks=True,
         )
 

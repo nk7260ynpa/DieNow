@@ -1,14 +1,25 @@
 """Claude Code CLI subprocess 的 LLMClient 實作.
 
 以 `subprocess.run([cli_path, "-p", <prompt>, "--output-format", "stream-json",
-[--model <id>]])` 呼叫 Claude Code CLI (非互動模式), 解析 stdout NDJSON
-事件流, 取最後一則 `type=result` 事件的 `result` 欄位作為 `LLMResponse.text`.
+"--verbose", [--model <id>]])` 呼叫 Claude Code CLI (非互動模式), 解析 stdout
+NDJSON 事件流, 取最後一則 `type=result` 事件的 `result` 欄位作為
+`LLMResponse.text`.
+
+Claude Code CLI >= 2.x 規定 `-p` 搭配 `--output-format stream-json` 時必須
+同時加上 `--verbose`, 否則會直接非零退出. `--verbose` 會多送一些診斷事件
+(`type=system` init / 每則 `type=assistant` 細節 / 記憶體 / rate limit 等),
+但最終答案仍位於 `type=result`, `_parse_ndjson` 僅依賴該事件.
+
+認證採環境變數 `CLAUDE_CODE_OAUTH_TOKEN` (`claude setup-token` 產出的
+long-lived token). 該 token 可跨主機 / 容器使用, 不依賴主機 Keychain;
+Linux 容器亦可承繼 Max 訂閱身份. 不再依賴 `~/.claude/` mount.
 
 本實作不使用 `anthropic` SDK; 僅依賴 stdlib (`subprocess`, `json`, `shlex`,
-`shutil`, `pathlib`). Prompt caching 能力移除 (`CacheMetadata` 恆填 0).
+`shutil`). Prompt caching 能力移除 (`CacheMetadata` 恆填 0).
 
 設計依據: `openspec/changes/migrate-to-claude-cli-subprocess/design.md`
-D-1, D-2, D-5, D-8.
+D-1, D-2, D-5, D-8 (D-5 認證機制經 issues.md 2026-04-18 更新: 由
+`~/.claude/` mount 改為 `CLAUDE_CODE_OAUTH_TOKEN` env).
 """
 
 from __future__ import annotations
@@ -19,7 +30,6 @@ import os
 import shlex
 import shutil
 import subprocess
-from pathlib import Path
 from typing import Any
 
 from ring_of_hands.llm.base import (
@@ -45,44 +55,40 @@ class ClaudeCLIClient:
     Args:
         cli_path: `claude` 可執行檔路徑 (預設自 `CLAUDE_CLI_PATH` 讀取, 最終
             預設為 `"claude"`). 必須可於 `shutil.which` 解析.
-        claude_home: Claude CLI 的 OAuth session 目錄 (預設自 `CLAUDE_HOME`
-            讀取, 最終預設為 `~/.claude`). 必須存在且為目錄.
         timeout_seconds: 預設 subprocess timeout, 若 `LLMRequest.timeout_seconds`
             有指定則以 request 為準.
         output_format: 輸出格式, 預設 `"stream-json"`; 可切換為 `"json"`
             (單次回傳, 非 NDJSON) 供未來擴充.
-        skip_startup_checks: 僅供測試; 啟用後跳過建構時的 CLI 存在 / 版本 /
-            home 目錄檢查.
+        skip_startup_checks: 僅供測試; 啟用後跳過建構時的 CLI 存在 / 版本
+            檢查.
+
+    Notes:
+        - 先前版本曾要求 `claude_home` 目錄存在; 已於 2026-04-18 移除,
+          因 macOS Keychain token 無法跨容器, 改由 `CLAUDE_CODE_OAUTH_TOKEN`
+          env 注入 (由 `claude setup-token` 產生). 為保持 API 相容,
+          constructor 仍接受 `claude_home=` kwarg 但不再驗證;
+          實務上該參數已不影響行為.
     """
 
     def __init__(
         self,
         *,
         cli_path: str | None = None,
-        claude_home: str | Path | None = None,
+        claude_home: Any = None,  # 相容用; 2026-04-18 後已不再驗證.
         timeout_seconds: float = 30.0,
         output_format: str = "stream-json",
         skip_startup_checks: bool = False,
     ) -> None:
+        del claude_home  # 保留 kwarg 僅為 API 相容, 實際不再使用.
         resolved_cli_path = cli_path if cli_path is not None else os.getenv(
             "CLAUDE_CLI_PATH", "claude"
         )
-        resolved_claude_home_raw = (
-            str(claude_home)
-            if claude_home is not None
-            else (os.getenv("CLAUDE_HOME") or "~/.claude")
-        )
-        resolved_claude_home = Path(
-            resolved_claude_home_raw.strip() or "~/.claude"
-        ).expanduser()
 
         if not skip_startup_checks:
             _validate_cli_executable(resolved_cli_path)
             _validate_cli_version(resolved_cli_path)
-            _validate_claude_home(resolved_claude_home)
 
         self._cli_path = resolved_cli_path
-        self._claude_home = resolved_claude_home
         self._timeout_seconds = timeout_seconds
         self._output_format = output_format
 
@@ -113,6 +119,14 @@ class ClaudeCLIClient:
         else:
             args.append(prompt)
         args.extend(["--output-format", self._output_format])
+        # Claude CLI >= 2.x 規定 `-p` + `--output-format stream-json` 必須
+        # 同時指定 `--verbose`, 否則 CLI 會直接非零退出並印出:
+        #   Error: When using --print, --output-format=stream-json requires
+        #   --verbose
+        # (實測於 v2.1.114). `--verbose` 僅增加診斷事件量, 最終答案仍在
+        # `type=result`, _parse_ndjson 能正確處理.
+        if self._output_format == "stream-json":
+            args.append("--verbose")
         if request.model:
             args.extend(["--model", request.model])
 
@@ -182,20 +196,6 @@ def _validate_cli_version(cli_path: str) -> None:
         raise ConfigValidationError(
             f"`{cli_path} --version` 退出碼 {result.returncode}: "
             f"{stderr_snippet or '無 stderr'}. 請確認 CLI 可正常啟動."
-        )
-
-
-def _validate_claude_home(claude_home: Path) -> None:
-    """檢查 Claude 的 OAuth session 目錄存在."""
-    if not claude_home.exists():
-        raise ConfigValidationError(
-            f"{claude_home} 不存在. 請先執行 `claude login` 建立 OAuth session "
-            "(或以 CLAUDE_HOME 指定其他路徑)."
-        )
-    if not claude_home.is_dir():
-        raise ConfigValidationError(
-            f"{claude_home} 不是目錄. 請先執行 `claude login` 建立 OAuth session "
-            "(或以 CLAUDE_HOME 指定其他路徑)."
         )
 
 
