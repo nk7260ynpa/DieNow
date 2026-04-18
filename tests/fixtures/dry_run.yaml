@@ -1,91 +1,75 @@
 # Dry-run fixture for FakeAnthropicClient.
 #
 # 結構:
-#   scripts: pov_1 ~ pov_5 的預錄劇本 (按順序). 每個 script 帶 pov_id / persona /
-#       events / death_cause. prior_life 由 FakeAnthropicClient 自動串接 (pov_n 的
-#       prior_life = 前一個 script).
+#   scripts: pov_1 ~ pov_5 的預錄劇本. prior_life 由 FakeAnthropicClient
+#       自動接上 (每個 pov_n 的 prior_life 會在 generate_all 時 attach 上
+#       script_{n-1} 的完整結構).
 #   project_agent_actions: pov_6 每個 tick 的預錄 action (循序取用).
 #   realtime_replies: 即時對話預錄回應 (key=pov_id, value=字串清單).
 #
-# 本 fixture 為 happy path (WIN). 各 pov_{1..5} 於對應 tick 走到自己的按鈕並按對,
-# 隨後在關卡尾段「死亡」(die 事件) — 這是因為 spec 要求每份 script 最後必有
-# `actor=pov_n, action_type="die"` 事件; 但在本 happy path 中實際 dispatch 時
-# scenario-runner 不會真的觸發死亡 dispatch (劇本中的 die 可由 rules-engine 跳過;
-# 見 pov-manager spec: die 事件為腳本結尾標記, 實際死亡由 rules-engine 另行判定).
+# 本 fixture 為 happy path (WIN).
 #
-# 本 fixture 讓 6 燈於 tick 5 全亮; pov_6 於 tick 1~4 移動接近 button_6,
-# 於 tick 5 按 button_6 (使 6 燈齊亮觸發防護窗), 於 tick 6 touch_ring 拿到戒指.
+# 位置假設 (來自 configs/default.yaml):
+#   body_n 起始位置 與 button_n 起始位置為 chebyshev_distance=1 的鄰接關係.
+#   pov_1..5 每份劇本只需「tick 1 按下對應按鈕」, tick 10 放 die marker.
+#   pov_6 tick 1 按 button_6 (6 燈齊亮); tick 2 向中央 ring=(5,5) 方向移動;
+#   pov_6 tick 6 抵達鄰接 ring 的位置後 touch_ring 拿戒指 WIN.
+#
+# body_6 起點 (8,8) → (7,7) 為 button_6, 禁止踩上去; 路徑規劃:
+#   tick 1 press button_6
+#   tick 2 move (-1, -1)  → (7, 7) 是 button_6 佔用, 禁止. 改 move (-1, 0) → (7, 8)
+#   tick 2 move (-1, 0)  → (7, 8)
+#   tick 3 move (-1, -1) → (6, 7)
+#   tick 4 move (-1, -1) → (5, 6) (ring=(5,5) 鄰接, chebyshev_distance=1)
+#   tick 5 touch_ring → WIN
 
 scripts:
   - pov_id: 1
-    persona:
-      name: "新生"
-      description: "從無到有的玩家."
-      traits: [curious]
+    persona: { name: "新生", description: "無前世", traits: [curious] }
     events:
-      - { t: 1, actor: 1, action_type: "move", payload: { delta: [1, 1] }, targets: [] }
-      - { t: 2, actor: 1, action_type: "press", payload: { button_id: 1 }, targets: [] }
+      - { t: 1, actor: 1, action_type: "press", payload: { button_id: 1 }, targets: [] }
       - { t: 10, actor: 1, action_type: "die", payload: { cause: "timeout" }, targets: [] }
     death_cause: "timeout"
 
   - pov_id: 2
-    persona:
-      name: "追憶者"
-      description: "帶著 1 層前世記憶."
-      traits: [cautious]
+    persona: { name: "追憶者", description: "1 層前世", traits: [cautious] }
     events:
-      - { t: 1, actor: 2, action_type: "move", payload: { delta: [1, -1] }, targets: [] }
-      - { t: 2, actor: 2, action_type: "press", payload: { button_id: 2 }, targets: [] }
+      - { t: 1, actor: 2, action_type: "press", payload: { button_id: 2 }, targets: [] }
       - { t: 10, actor: 2, action_type: "die", payload: { cause: "timeout" }, targets: [] }
     death_cause: "timeout"
 
   - pov_id: 3
-    persona:
-      name: "懷疑者"
-      description: "帶著 2 層前世記憶."
-      traits: [suspicious]
+    persona: { name: "懷疑者", description: "2 層前世", traits: [suspicious] }
     events:
-      - { t: 1, actor: 3, action_type: "move", payload: { delta: [1, 1] }, targets: [] }
-      - { t: 2, actor: 3, action_type: "press", payload: { button_id: 3 }, targets: [] }
+      - { t: 1, actor: 3, action_type: "press", payload: { button_id: 3 }, targets: [] }
       - { t: 10, actor: 3, action_type: "die", payload: { cause: "timeout" }, targets: [] }
     death_cause: "timeout"
 
   - pov_id: 4
-    persona:
-      name: "觀察者"
-      description: "帶著 3 層前世記憶."
-      traits: [patient]
+    persona: { name: "觀察者", description: "3 層前世", traits: [patient] }
     events:
-      - { t: 1, actor: 4, action_type: "move", payload: { delta: [1, -1] }, targets: [] }
-      - { t: 2, actor: 4, action_type: "press", payload: { button_id: 4 }, targets: [] }
+      - { t: 1, actor: 4, action_type: "press", payload: { button_id: 4 }, targets: [] }
       - { t: 10, actor: 4, action_type: "die", payload: { cause: "timeout" }, targets: [] }
     death_cause: "timeout"
 
   - pov_id: 5
-    persona:
-      name: "預知者"
-      description: "帶著 4 層前世記憶."
-      traits: [calculating]
+    persona: { name: "預知者", description: "4 層前世", traits: [calculating] }
     events:
-      - { t: 1, actor: 5, action_type: "move", payload: { delta: [-1, 1] }, targets: [] }
-      - { t: 2, actor: 5, action_type: "press", payload: { button_id: 5 }, targets: [] }
+      - { t: 1, actor: 5, action_type: "press", payload: { button_id: 5 }, targets: [] }
       - { t: 10, actor: 5, action_type: "die", payload: { cause: "timeout" }, targets: [] }
     death_cause: "timeout"
 
-# pov_6 每 tick 的預錄 action. 按 list 順序取用;
-# 若 tick 數超過長度則最後一個動作重複使用 (通常是 wait).
 project_agent_actions:
-  - { action: "move", delta: [-1, -1] }       # tick 1: 從 (8,8) 往 (7,7) (button_6)
-  - { action: "press", button_id: 6 }         # tick 2: 按 button_6 (6 燈齊亮)
-  - { action: "move", delta: [-1, -1] }       # tick 3: 往 (6,6)
-  - { action: "move", delta: [-1, -1] }       # tick 4: 往 (5,5) ring 位置
-  - { action: "touch_ring" }                  # tick 5: 拿戒指 WIN
+  - { action: "press", button_id: 6 }          # tick 1: 6 燈齊亮 → 防護窗 open
+  - { action: "move", delta: [-1, 0] }          # tick 2: (8,8) → (7,8)
+  - { action: "move", delta: [-1, -1] }         # tick 3: (7,8) → (6,7)
+  - { action: "move", delta: [-1, -1] }         # tick 4: (6,7) → (5,6)
+  - { action: "touch_ring" }                    # tick 5: WIN
   - { action: "wait" }
 
-# 即時對話的預錄回應 (pov_id -> 字串清單).
 realtime_replies:
-  "1": ["我剛醒來, 什麼都不確定."]
-  "2": ["我不太想回答."]
+  "1": ["我什麼都不記得了."]
+  "2": ["別問我."]
   "3": ["..."]
   "4": ["嗯."]
   "5": ["我只想活下去."]
