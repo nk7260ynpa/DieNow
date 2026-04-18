@@ -5,11 +5,13 @@
 2. 讀取 `configs/personas.yaml` 取得 pov_1..5 persona.
 3. 以 `python-dotenv` 讀取 `.env` (若存在), 注入 `CLAUDE_CLI_PATH` 等.
 4. 驗證並回傳 `ScenarioConfig`.
-5. 若 `dry_run=False` 且 `llm_client="claude_cli"`, 執行 design D-5 預啟動
-   檢查:
+5. 若 `dry_run=False` 且 `llm_client="claude_cli"`, 執行下列預啟動檢查:
    - `shutil.which(cli_path)` 不為 None.
    - `subprocess.run([cli_path, "--version"], timeout=5, check=False)` exit 0.
-   - `Path(claude_home).expanduser().is_dir()`.
+   - `CLAUDE_CODE_OAUTH_TOKEN` 或 `ANTHROPIC_API_KEY` 至少其一被設定
+     (2026-04-18 修正: macOS Keychain token 無法跨容器, `~/.claude/`
+     目錄 mount 無法承繼認證; 正確作法是透過 `claude setup-token` 產生
+     long-lived token 並以 env 注入).
    任一失敗 raise `ConfigValidationError`.
 
 本 change (`migrate-to-claude-cli-subprocess`) 將 `ConfigValidationError`
@@ -33,6 +35,12 @@ from ring_of_hands.llm.base import (
 )
 from ring_of_hands.scenario_runner.types import ScenarioConfig, WorldConfig
 from ring_of_hands.script_generator.types import Persona
+
+
+# 認證環境變數名稱; 優先使用 `CLAUDE_CODE_OAUTH_TOKEN` (由 `claude setup-token`
+# 產生, 支援 Max 訂閱計費), fallback 到 `ANTHROPIC_API_KEY` (API key 計費).
+_OAUTH_TOKEN_ENV = "CLAUDE_CODE_OAUTH_TOKEN"
+_API_KEY_ENV = "ANTHROPIC_API_KEY"
 
 
 class FixtureNotFoundError(Exception):
@@ -163,16 +171,24 @@ def load_config(
         if config.llm_client == "claude_cli" and not skip_cli_checks:
             _validate_claude_cli_environment(
                 cli_path=config.cli_path,
-                claude_home=config.claude_home,
+                env=env,
             )
 
     return config
 
 
 def _validate_claude_cli_environment(
-    *, cli_path: str, claude_home: str
+    *, cli_path: str, env: dict[str, str]
 ) -> None:
-    """執行 design D-5 的 CLI 預啟動檢查.
+    """執行 Claude CLI 預啟動檢查.
+
+    2026-04-18 修正: `~/.claude/` 目錄存在 (`claude login`) 在 macOS 上
+    並不能實際承繼到容器, 因 OAuth token 存於 macOS Keychain; 改為檢查
+    `CLAUDE_CODE_OAUTH_TOKEN` 或 `ANTHROPIC_API_KEY` 是否設定.
+
+    Args:
+        cli_path: `claude` 可執行檔路徑.
+        env: 已合併 os.environ 與 `.env` 的 env dict.
 
     Raises:
         ConfigValidationError: 任一檢查失敗.
@@ -203,16 +219,15 @@ def _validate_claude_cli_environment(
             f"`{cli_path} --version` 退出碼 {result.returncode}: "
             f"{stderr_snippet or '無 stderr'}. 請確認 CLI 可正常啟動."
         )
-    # 3. ~/.claude/ 目錄存在.
-    home_path = Path(claude_home).expanduser()
-    if not home_path.exists():
+    # 3. 認證 env: CLAUDE_CODE_OAUTH_TOKEN 或 ANTHROPIC_API_KEY 至少其一.
+    oauth = (env.get(_OAUTH_TOKEN_ENV) or "").strip()
+    api_key = (env.get(_API_KEY_ENV) or "").strip()
+    if not oauth and not api_key:
         raise ConfigValidationError(
-            f"{home_path} 不存在. 請先執行 `claude login` 建立 OAuth session "
-            "(或以 CLAUDE_HOME 指定其他路徑)."
-        )
-    if not home_path.is_dir():
-        raise ConfigValidationError(
-            f"{home_path} 不是目錄. 請先執行 `claude login` 建立 OAuth session."
+            f"缺少 Claude 認證 env: 需設定 {_OAUTH_TOKEN_ENV} (推薦, 走 "
+            "Max 訂閱計費) 或 ANTHROPIC_API_KEY (走 API key 計費). "
+            "建議先於主機執行 `claude setup-token` 產生 long-lived "
+            f"OAuth token, 再以 `{_OAUTH_TOKEN_ENV}=<token>` 寫入 `.env`."
         )
 
 

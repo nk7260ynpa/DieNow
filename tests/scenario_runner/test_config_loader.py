@@ -4,9 +4,13 @@
 - 預設設定啟動成功 (dry-run, fake client).
 - 缺少 config 檔時 raise ConfigValidationError.
 - llm_client="claude_cli" 且 CLI 不存在時 raise ConfigValidationError.
-- llm_client="claude_cli" 且 ~/.claude/ 不存在時 raise ConfigValidationError.
+- llm_client="claude_cli" 且缺 OAuth token 時 raise ConfigValidationError.
 - dry-run 模式下 MUST 跳過 CLI 相關檢查.
 - CLAUDE_CLI_TIMEOUT_SECONDS 覆寫預設 timeout.
+
+2026-04-18 更新: 預啟動檢查移除 `~/.claude/` 目錄存在性, 改為驗證
+`CLAUDE_CODE_OAUTH_TOKEN` 或 `ANTHROPIC_API_KEY` env 設定
+(因 macOS Keychain token 無法跨容器).
 """
 
 from __future__ import annotations
@@ -98,6 +102,7 @@ class TestClaudeCliValidation:
     ) -> None:
         """缺 `claude` 指令 → ConfigValidationError."""
         self._write_cli_cfg(configs_dir)
+        monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "dummy")
         monkeypatch.setattr(
             "ring_of_hands.scenario_runner.config_loader.shutil.which",
             lambda _: None,
@@ -113,6 +118,7 @@ class TestClaudeCliValidation:
     ) -> None:
         """`claude --version` 非零退出 → ConfigValidationError."""
         self._write_cli_cfg(configs_dir)
+        monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "dummy")
         import subprocess
 
         monkeypatch.setattr(
@@ -133,14 +139,15 @@ class TestClaudeCliValidation:
             load_config(configs_dir / "default.yaml")
         assert "退出碼 1" in str(excinfo.value)
 
-    def test_claude_home_missing_raises(
+    def test_oauth_token_missing_raises(
         self,
         configs_dir: Path,
         monkeypatch: pytest.MonkeyPatch,
-        tmp_path: Path,
     ) -> None:
-        """~/.claude/ 不存在 → ConfigValidationError."""
+        """OAuth token 與 API key 皆缺 → ConfigValidationError."""
         self._write_cli_cfg(configs_dir)
+        monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
         import subprocess
 
         monkeypatch.setattr(
@@ -157,17 +164,48 @@ class TestClaudeCliValidation:
             "ring_of_hands.scenario_runner.config_loader.subprocess.run",
             _fake_run,
         )
-        monkeypatch.setenv("CLAUDE_HOME", str(tmp_path / "nope"))
         with pytest.raises(ConfigValidationError) as excinfo:
             load_config(configs_dir / "default.yaml")
-        assert "請先執行 `claude login`" in str(excinfo.value)
+        msg = str(excinfo.value)
+        assert "CLAUDE_CODE_OAUTH_TOKEN" in msg
+        assert "claude setup-token" in msg
+
+    def test_api_key_alone_passes_auth_check(
+        self,
+        configs_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """只有 ANTHROPIC_API_KEY 時認證檢查 MUST 通過."""
+        self._write_cli_cfg(configs_dir)
+        monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-dummy")
+        import subprocess
+
+        monkeypatch.setattr(
+            "ring_of_hands.scenario_runner.config_loader.shutil.which",
+            lambda p: p,
+        )
+
+        def _fake_run(*a, **kw):
+            return subprocess.CompletedProcess(
+                args=a[0], returncode=0, stdout="1.0", stderr=""
+            )
+
+        monkeypatch.setattr(
+            "ring_of_hands.scenario_runner.config_loader.subprocess.run",
+            _fake_run,
+        )
+        cfg = load_config(configs_dir / "default.yaml")
+        assert cfg.llm_client == "claude_cli"
 
     def test_dry_run_skips_cli_checks(
         self, configs_dir: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """dry-run 模式 MUST 跳過 Claude CLI 預啟動檢查."""
         self._write_cli_cfg(configs_dir)
-        # 模擬 CLI 不存在.
+        # 模擬 CLI 不存在; 也清掉 token env.
+        monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
         monkeypatch.setattr(
             "ring_of_hands.scenario_runner.config_loader.shutil.which",
             lambda _: None,
@@ -177,16 +215,14 @@ class TestClaudeCliValidation:
         assert cfg.llm_client == "fake"
         assert cfg.dry_run is True
 
-    def test_successful_startup_with_valid_cli_env(
+    def test_successful_startup_with_valid_cli_and_token(
         self,
         configs_dir: Path,
         monkeypatch: pytest.MonkeyPatch,
-        tmp_path: Path,
     ) -> None:
-        """CLI 與 ~/.claude 都就緒時 claude_cli 可啟動."""
+        """CLI 可執行且 OAuth token 存在 → claude_cli 可啟動."""
         self._write_cli_cfg(configs_dir)
-        fake_home = tmp_path / ".claude"
-        fake_home.mkdir()
+        monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "dummy-token")
         import subprocess
 
         monkeypatch.setattr(
@@ -203,7 +239,6 @@ class TestClaudeCliValidation:
             "ring_of_hands.scenario_runner.config_loader.subprocess.run",
             _fake_run,
         )
-        monkeypatch.setenv("CLAUDE_HOME", str(fake_home))
         cfg = load_config(configs_dir / "default.yaml")
         assert cfg.llm_client == "claude_cli"
         assert cfg.cli_path == "claude"

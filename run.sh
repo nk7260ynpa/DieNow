@@ -8,11 +8,14 @@
 #   ./run.sh pytest           # 於容器內跑測試
 #   ./run.sh python -m ...    # 透傳任意指令
 #
-# 非 dry-run 模式會先於主機檢查:
-# - `claude` CLI 是否可執行 (已安裝並位於 PATH).
-# - 主機 `~/.claude/` 是否存在 (代表 `claude login` 已完成一次).
-# 兩者任一失敗即 exit 1, 不啟動 container. dry-run 模式 (第一個參數
-# 含 `--dry-run`) 會跳過上述檢查以保離線測試能力.
+# 非 dry-run 模式會先於主機檢查 `.env` 是否包含有值的
+# CLAUDE_CODE_OAUTH_TOKEN 或 ANTHROPIC_API_KEY. 缺失即 exit 1,
+# 不啟動 container. dry-run 模式 (第一個參數含 `--dry-run`) 會
+# 跳過上述檢查以保離線測試能力.
+#
+# 容器內已自帶 Claude Code CLI (Dockerfile 層安裝), 認證靠 env_file
+# 注入的 OAuth token; 因此主機不再需要安裝 claude 或執行 claude login
+# (2026-04-18 起, 原 Keychain-based 方案無法跨容器).
 #
 # 遵循 Google Shell Style Guide.
 
@@ -23,11 +26,12 @@ set -o pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly SCRIPT_DIR
 readonly COMPOSE_FILE="${SCRIPT_DIR}/docker/docker-compose.yaml"
+readonly ENV_FILE="${SCRIPT_DIR}/.env"
 
 # 確保 logs/ 目錄存在, 避免 compose 掛載時建立為 root-owned 目錄.
 mkdir -p "${SCRIPT_DIR}/logs"
 
-# 判斷 args 中是否帶 --dry-run 以決定是否跳過 CLI 前置檢查.
+# 判斷 args 中是否帶 --dry-run 以決定是否跳過認證前置檢查.
 is_dry_run=false
 for arg in "$@"; do
   if [[ "${arg}" == "--dry-run" ]]; then
@@ -36,17 +40,30 @@ for arg in "$@"; do
   fi
 done
 
-# 非 dry-run 模式下先檢查主機 `claude` CLI 與 ~/.claude 目錄.
+# 非 dry-run 模式下檢查 `.env` 是否包含有值的 OAuth token 或 API key.
+# (僅在主機預先攔截, 若使用者直接呼叫容器仍會由 scenario_runner
+# 再做一次驗證.)
 if [[ "${is_dry_run}" == "false" ]]; then
-  if ! command -v claude >/dev/null 2>&1; then
-    echo "ERROR: 'claude' CLI 未安裝於主機." >&2
-    echo "請先執行 'curl -fsSL https://claude.ai/install.sh | bash' 或" >&2
-    echo "'npm install -g @anthropic-ai/claude-code' 安裝 Claude Code CLI." >&2
+  if [[ ! -f "${ENV_FILE}" ]]; then
+    echo "ERROR: ${ENV_FILE} 不存在." >&2
+    echo "請複製 .env.example 為 .env 並填入 CLAUDE_CODE_OAUTH_TOKEN." >&2
+    echo "token 由主機執行 'claude setup-token' 取得." >&2
     exit 1
   fi
-  if [[ ! -d "${HOME}/.claude" ]]; then
-    echo "ERROR: ~/.claude 不存在." >&2
-    echo "請先於主機執行 'claude login' 建立 OAuth session." >&2
+  # 擷取非註解的變數值; 支援 KEY=value 與 KEY="value" / KEY='value'.
+  oauth_token="$(
+    sed -n 's/^[[:space:]]*CLAUDE_CODE_OAUTH_TOKEN[[:space:]]*=[[:space:]]*\(.*\)$/\1/p' \
+      "${ENV_FILE}" | head -n 1 | tr -d '"' | tr -d "'" | xargs || true
+  )"
+  api_key="$(
+    sed -n 's/^[[:space:]]*ANTHROPIC_API_KEY[[:space:]]*=[[:space:]]*\(.*\)$/\1/p' \
+      "${ENV_FILE}" | head -n 1 | tr -d '"' | tr -d "'" | xargs || true
+  )"
+  if [[ -z "${oauth_token}" && -z "${api_key}" ]]; then
+    echo "ERROR: .env 缺少 CLAUDE_CODE_OAUTH_TOKEN (或 ANTHROPIC_API_KEY)." >&2
+    echo "請於主機執行 'claude setup-token' 產生 long-lived OAuth token," >&2
+    echo "並寫入 ${ENV_FILE}:" >&2
+    echo "  CLAUDE_CODE_OAUTH_TOKEN=<token>" >&2
     exit 1
   fi
 fi

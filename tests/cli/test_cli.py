@@ -1,8 +1,10 @@
 """CLI 測試 (`python -m ring_of_hands.cli run ...`).
 
 本 change (`migrate-to-claude-cli-subprocess`) 後:
-- 不再需要 ANTHROPIC_API_KEY.
-- 非 dry-run 模式下缺 `claude` CLI 或 `~/.claude/` 會非零退出.
+- 非 dry-run 模式下缺 `claude` CLI 或缺 OAuth token / API key 會非零退出.
+
+2026-04-18 更新: `~/.claude/` 缺失的檢查已改為 `CLAUDE_CODE_OAUTH_TOKEN`
+缺失的檢查 (因 macOS Keychain token 無法跨容器).
 """
 
 from __future__ import annotations
@@ -63,7 +65,8 @@ class TestCli:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """非 dry-run 且 `claude` 不存在 → 非零退出, stderr 含安裝建議."""
-        # 模擬 CLI 不存在.
+        # 模擬 CLI 不存在; 但有 OAuth token 以確保錯誤訊息是 CLI not found.
+        monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "dummy")
         monkeypatch.setattr(
             "ring_of_hands.scenario_runner.config_loader.shutil.which",
             lambda _: None,
@@ -86,14 +89,16 @@ class TestCli:
         assert "ConfigValidationError" in captured.err
         assert "claude CLI 不可執行" in captured.err
 
-    def test_claude_home_missing_non_dry_run_exits_nonzero(
+    def test_oauth_token_missing_non_dry_run_exits_nonzero(
         self,
         tmp_path: Path,
         capsys: pytest.CaptureFixture[str],
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """非 dry-run 且 `~/.claude/` 不存在 → 非零退出, stderr 提示 `claude login`."""
-        # 模擬 CLI 存在, version 成功, 但 ~/.claude/ 不存在.
+        """非 dry-run 且缺認證 env → 非零退出, stderr 提示 `claude setup-token`."""
+        # 模擬 CLI 存在, version 成功, 但無認證 env.
+        monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
         monkeypatch.setattr(
             "ring_of_hands.scenario_runner.config_loader.shutil.which",
             lambda p: p,
@@ -108,7 +113,6 @@ class TestCli:
             "ring_of_hands.scenario_runner.config_loader.subprocess.run",
             _fake_run,
         )
-        monkeypatch.setenv("CLAUDE_HOME", str(tmp_path / "does-not-exist"))
 
         from ring_of_hands.cli import main
 
@@ -125,4 +129,4 @@ class TestCli:
         )
         captured = capsys.readouterr()
         assert code != 0
-        assert "claude login" in captured.err
+        assert "claude setup-token" in captured.err

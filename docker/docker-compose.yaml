@@ -4,15 +4,16 @@ services:
     build:
       context: ..
       dockerfile: docker/Dockerfile
+    # env_file 會把 `.env` 內所有變數注入容器環境, 其中包含
+    # `CLAUDE_CODE_OAUTH_TOKEN` — 容器內的 `claude` CLI 讀取此 env 後
+    # 即可承繼 Max 訂閱身份. 2026-04-18 起不再 mount `~/.claude`:
+    # macOS Keychain 內的 token 無法跨到 Linux 容器, 且 `claude setup-token`
+    # 產生的 long-lived token 透過 env 注入已足夠.
     env_file:
       - ../.env
     environment:
       PYTHONPATH: /app/src
     volumes:
       - ../logs:/app/logs
-      # 將主機 ~/.claude 掛入容器, 使容器內 `claude -p ...` 能承繼 Max 訂閱
-      # OAuth session. 目前以 read-write 掛載, 避免 CLI 刷新 token 時
-      # 寫入失敗; 若日後確認 session 檔完全 immutable, 可改為 :ro.
-      - ${HOME}/.claude:/home/app/.claude
     working_dir: /app
     # 預設指令透過 run.sh 透傳; compose 本身不指定 command, 以 Dockerfile 的 CMD 為準.
