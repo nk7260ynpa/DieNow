@@ -17,7 +17,8 @@ pov_6 攜帶 5 層遞迴前世記憶並作為**唯一自由主體**。
 - Pydantic v2 (`frozen=True` 強制 immutable)
 - **LLM 後端: Claude Code CLI subprocess + Claude Max 訂閱**
   透過 `subprocess.run(["claude", "-p", ...])` 非互動呼叫 Claude CLI,
-  計費由主機 `claude login` 建立的 Max 訂閱 OAuth session 承擔;
+  計費由 `CLAUDE_CODE_OAUTH_TOKEN` (`claude setup-token` 產生的 long-lived
+  token) 所綁定的 Max 訂閱身份承擔;
   **不使用** `anthropic` Python SDK。
 - pytest / pytest-asyncio
 - structlog / PyYAML / python-dotenv
@@ -35,7 +36,7 @@ pov_6 攜帶 5 層遞迴前世記憶並作為**唯一自由主體**。
 ├── docker/
 │   ├── Dockerfile               # python:3.11-slim + Claude CLI + 非 root user
 │   ├── build.sh                 # 建立 Docker image (自動帶 APP_UID/GID)
-│   └── docker-compose.yaml      # service `app`, volume logs/ + ~/.claude
+│   └── docker-compose.yaml      # service `app`, volume logs/; env_file 注入 OAuth token
 ├── configs/
 │   ├── default.yaml             # 預設關卡 config
 │   └── personas.yaml            # pov_1..5 persona 模板
@@ -107,9 +108,17 @@ pov_6 攜帶 5 層遞迴前世記憶並作為**唯一自由主體**。
 
 ## 前置需求
 
-### 1. 於主機安裝 Claude Code CLI
+> **2026-04-18 更新**：原本預期透過 `claude login` + mount `~/.claude/`
+> 讓容器承繼 macOS 主機的 OAuth session;實測 macOS 將 token 存於
+> Keychain、`~/.claude.json` 僅含 metadata,容器內無法實際承繼身份
+> (會 401)。正確作法改為透過 `claude setup-token` 產生 **long-lived
+> token**,以 env 注入容器。以下步驟反映此修正方案。
 
-由於本專案透過 `subprocess` 呼叫 Claude CLI, **主機**必須先安裝 CLI。
+### 1. (可選) 於主機安裝 Claude Code CLI
+
+容器內已自帶 CLI (`docker/Dockerfile` 內以 `npm install -g
+@anthropic-ai/claude-code` 安裝)。**僅當主機需要 `claude setup-token`
+產生 token** 時才需要於主機安裝:
 
 ```bash
 # 方式 A: 官方安裝腳本
@@ -122,54 +131,54 @@ npm install -g @anthropic-ai/claude-code
 claude --version
 ```
 
-### 2. 於主機執行 `claude login` 建立 Claude Max 訂閱 OAuth session
+### 2. 於主機執行 `claude setup-token` 產生 long-lived OAuth token
 
 ```bash
-claude login
+claude setup-token
 ```
 
-此指令會啟動瀏覽器登入流程, 登入後會於主機 `~/.claude/` 目錄建立 session 檔。
-Docker container 會透過 bind mount 共享此目錄, 因此容器內的 `claude`
-可以承繼 Max 訂閱身份進行非互動呼叫。
+此指令會啟動瀏覽器授權流程, 完成後於 terminal 輸出一串 token。
+**該 token 可跨機器、跨容器使用**, 與 `claude login` 不同(後者存於
+Keychain、無法跨主機)。
 
-### 3. (可選) 設定環境變數
-
-複製範例檔並視需要編輯:
+### 3. 寫入 `.env`
 
 ```bash
 cp .env.example .env
+# 編輯 .env, 把 token 填入下列欄位:
+#   CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-...
 ```
 
 主要欄位:
 
 | 變數 | 預設 | 說明 |
 |------|------|------|
-| `CLAUDE_CLI_PATH` | `claude` | `claude` 可執行檔路徑 |
+| `CLAUDE_CODE_OAUTH_TOKEN` | — | **必填 (非 dry-run)**; `claude setup-token` 產出的 long-lived token |
+| `ANTHROPIC_API_KEY` | — | 後備認證 (走 API key 計費); 若不用 Max 訂閱時使用 |
+| `CLAUDE_CLI_PATH` | `claude` | `claude` 可執行檔路徑 (容器內預設) |
 | `CLAUDE_CLI_TIMEOUT_SECONDS` | `30` | 每次 CLI 呼叫的 timeout (秒) |
-| `CLAUDE_HOME` | 空 (= `~/.claude`) | OAuth session 存放目錄 |
+| `CLAUDE_HOME` | 空 | 向後相容欄位; 2026-04-18 起不再用於預啟動檢查 |
 | `PROJECT_AGENT_MODEL` | `claude-sonnet-4-7` | Project agent 使用的模型; 空字串代表走 CLI 預設 |
 | `LOG_LEVEL` | `INFO` | structlog 等級 |
 
-**本 change 起已移除 `ANTHROPIC_API_KEY` 的設定**;
-若舊 `.env` 仍有此欄位會被忽略。
-
 ## 快速開始
 
-1. 依「前置需求」於主機安裝 Claude CLI 並執行 `claude login`。
+1. 依「前置需求」於主機取得 `CLAUDE_CODE_OAUTH_TOKEN`。
 
-2. 建立 Docker image (自動帶入主機 UID/GID 以對齊 `~/.claude` 擁有者):
+2. 建立 Docker image:
 
    ```bash
    ./docker/build.sh
    ```
 
-3. 準備 `.env` (從範例複製即可; 不需要 API Key):
+3. 準備 `.env` (從範例複製後填入 token):
 
    ```bash
    cp .env.example .env
+   # 編輯 .env: 填入 CLAUDE_CODE_OAUTH_TOKEN=<你的 token>
    ```
 
-4. 先以 dry-run 模式驗證流程 (不呼叫真實 LLM, 不需要 CLI 已登入):
+4. 先以 dry-run 模式驗證流程 (不呼叫真實 LLM, 不需要 token):
 
    ```bash
    ./run.sh --dry-run
@@ -208,14 +217,25 @@ docker compose -f docker/docker-compose.yaml run --rm app pytest
 
 | 錯誤訊息 | 原因 | 處置 |
 |---------|------|------|
-| `ConfigValidationError: claude CLI 不可執行` | 主機未安裝 Claude CLI 或不在 PATH | 執行 `curl -fsSL https://claude.ai/install.sh \| bash` 或 `npm install -g @anthropic-ai/claude-code` 安裝; 確認 `claude --version` 可執行 |
-| `ConfigValidationError: ~/.claude 不存在` / `請先執行 claude login` | 主機未執行過 `claude login` | 於主機執行 `claude login` 建立 OAuth session |
-| `LLMCallFailedError(reason="cli_auth_error")` 或 CLI stderr 提示 session/auth 失敗 | Max 訂閱 OAuth session 過期 | 於主機重新執行 `claude login` |
-| `LLMCallFailedError(reason="cli_timeout")` | 單次 `claude -p ...` 呼叫超過預設 30 秒 | 調大 `CLAUDE_CLI_TIMEOUT_SECONDS` (例如設為 60); 或確認主機網路/服務狀況 |
-| `LLMCallFailedError(reason="cli_nonzero_exit:<rc>")` | CLI 非零退出 (常見於 auth 失效或模型不可用) | 檢查 stderr 內容; 對應處理 auth 或換模型 |
+| `ConfigValidationError: claude CLI 不可執行` | 容器內 CLI 異常 (正常情況下不該發生) | 重建 image (`./docker/build.sh`); 確認 Dockerfile 的 npm install 成功 |
+| `ConfigValidationError: 缺少 Claude 認證 env` / `請先於主機執行 claude setup-token` | 未設 `CLAUDE_CODE_OAUTH_TOKEN` (或 `ANTHROPIC_API_KEY`) | 於主機執行 `claude setup-token`, 把輸出的 token 填入 `.env` 的 `CLAUDE_CODE_OAUTH_TOKEN` |
+| `LLMCallFailedError(reason="cli_nonzero_exit:1")` 且 CLI stderr 顯示 `401 "Invalid authentication credentials"` 或 `authentication_error` | OAuth token 過期 / 失效 / 錯填 | 重新執行 `claude setup-token`, 更新 `.env` 的 token |
+| `LLMCallFailedError(reason="cli_auth_error")` (若 parser 將之轉為 auth error) | 同上 | 同上 |
+| `LLMCallFailedError(reason="cli_timeout")` | 單次 `claude -p ...` 呼叫超過預設 30 秒 | 調大 `CLAUDE_CLI_TIMEOUT_SECONDS` (例如 60); 或確認主機網路/服務狀況 |
+| `LLMCallFailedError(reason="cli_nonzero_exit:<rc>")` | CLI 其他非零退出 (模型不可用 / 超過 rate limit / CLI 錯誤) | 查看 stderr; 若為 rate limit 等待或改用較低負載的模型; 若為 `--verbose` 相關錯誤表示 CLI 升級後行為變動, 回報 |
 | `LLMCallFailedError(reason="no_result_event")` | CLI 成功執行但 stdout 無 `type=result` 事件 | 檢查 CLI 版本; 必要時回報並提供原始 stdout |
 | `ndjson_parse_error` | CLI stdout 完全無法以 NDJSON 解析 | 檢查 CLI 版本或主機環境; 此錯誤亦可能為 CLI 發生 crash |
 | `ScriptGenerationError` / `issues.md` 追加紀錄 | LLM 連續回傳非合法 JSON script 導致 retry 耗盡 | 檢查 prompt caching / 模型版本; 必要時提高 `max_retries` |
+
+> **debug 小技巧**：若懷疑認證失敗, 直接在容器內跑:
+>
+> ```bash
+> docker compose -f docker/docker-compose.yaml run --rm app \
+>   claude -p "ping" --output-format stream-json --verbose
+> ```
+>
+> 成功時會看到 `type=result` 事件; 若回傳 `401 authentication_error`
+> 代表 token 失效。
 
 ## 系統 Invariants
 
