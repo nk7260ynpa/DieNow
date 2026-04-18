@@ -1,7 +1,7 @@
 """LLM Client 介面與資料結構.
 
 `LLMClient` 為 Protocol; 所有 LLM 呼叫端 MUST 僅依賴此 Protocol 以支援
-離線測試 (FakeAnthropicClient).
+離線測試 (FakeLLMClient).
 """
 
 from __future__ import annotations
@@ -12,14 +12,22 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 class LLMSystemBlock(BaseModel):
-    """可快取的 system block."""
+    """可快取的 system block.
+
+    Attributes:
+        text: block 的文字內容.
+        cache: 歷史語意為「建議套用 prompt caching」; `ClaudeCLIClient` 會
+            忽略此欄位. 於本 change (migrate-to-claude-cli-subprocess) 之後
+            已無 SDK 後端消費此欄位, 保留為相容欄位, 方便日後上游恢復
+            caching 能力時重新啟用.
+        label: 人類可讀標籤 (例如 'persona', 'rules', 'prior_life').
+    """
 
     model_config = ConfigDict(frozen=True)
 
     text: str
     cache: bool = True
     label: str | None = None
-    """人類可讀標籤 (例如 'persona', 'rules', 'prior_life')."""
 
 
 class LLMMessage(BaseModel):
@@ -32,7 +40,11 @@ class LLMMessage(BaseModel):
 
 
 class LLMToolDefinition(BaseModel):
-    """Anthropic tool use 定義."""
+    """Anthropic tool use 定義 (僅 SDK 後端使用).
+
+    `ClaudeCLIClient` 不支援 tool use, 收到此欄位會被忽略; 保留為向後相容
+    欄位.
+    """
 
     model_config = ConfigDict(frozen=True)
 
@@ -58,7 +70,11 @@ class LLMRequest(BaseModel):
 
 
 class CacheMetadata(BaseModel):
-    """Prompt caching 指標."""
+    """Prompt caching 指標.
+
+    欄位保留以維持下游 log schema 穩定; 非 Anthropic SDK 後端 (例如
+    `ClaudeCLIClient`) 會將兩個欄位恆填 0.
+    """
 
     model_config = ConfigDict(frozen=True)
 
@@ -87,6 +103,16 @@ class LLMCallFailedError(Exception):
         self.cause = cause
 
 
+class ConfigValidationError(Exception):
+    """LLM 相關設定不合法 (缺 CLI / API key / 模型名非支援等).
+
+    於本專案由 `ClaudeCLIClient.__init__`、`scenario_runner.config_loader`、
+    `project_agent.validate_model_name` 等處 raise. 歷史上此例外位於
+    `ring_of_hands.project_agent.agent`, 本 change 遷移至 `llm.base` 以
+    解除循環 import; `project_agent.agent` 仍 re-export 以保持向後相容.
+    """
+
+
 class LLMClient(Protocol):
     """LLM 呼叫介面.
 
@@ -101,6 +127,7 @@ class LLMClient(Protocol):
 
 __all__ = [
     "CacheMetadata",
+    "ConfigValidationError",
     "LLMCallFailedError",
     "LLMClient",
     "LLMMessage",
