@@ -1,4 +1,4 @@
-"""Project Agent: 以 Anthropic SDK 為 pov_6 決策.
+"""Project Agent: 以 Claude Code CLI subprocess 為 pov_6 決策.
 
 核心介面:
 - `decide(observation)` → 回傳合法 `Action`.
@@ -7,6 +7,14 @@
 錯誤處理:
 - 連續 3 次 LLM 呼叫失敗 → raise `LLMUnavailableError`.
 - 單次失敗 / 解析失敗 → raise `ActionParseError` 讓 pov-manager 降級 Wait.
+
+本 change (`migrate-to-claude-cli-subprocess`) 將底層 LLM 後端由 Anthropic
+SDK 遷移至 Claude CLI subprocess, 故:
+- 不再使用 Anthropic `tool_use`; 改以 prompt 誘導 LLM 輸出 JSON,
+  `action_parser` 以 `response.text` 解析.
+- 不再附加 `cache_control`; system_blocks 仍為 3 個邏輯區塊 (persona /
+  rules / prior_life) 以保留日後恢復 caching 的彈性.
+- `CacheMetadata` 欄位保留但恆為 0.
 """
 
 from __future__ import annotations
@@ -14,18 +22,17 @@ from __future__ import annotations
 import json
 import logging
 import re
-from typing import Any
 
 import structlog
 
 from ring_of_hands.llm.base import (
+    ConfigValidationError as ConfigValidationError,
     LLMCallFailedError,
     LLMClient,
     LLMMessage,
     LLMRequest,
     LLMResponse,
     LLMSystemBlock,
-    LLMToolDefinition,
 )
 from ring_of_hands.project_agent.action_parser import (
     ActionParseError,
@@ -39,8 +46,10 @@ logger = logging.getLogger(__name__)
 structlog_logger = structlog.get_logger("project_agent")
 
 
-class ConfigValidationError(Exception):
-    """設定不合法 (缺 API key / 模型名非支援)."""
+# NOTE: `ConfigValidationError` 於本 change 已遷至 `llm.base`; 此處以
+# `as ConfigValidationError` 重新匯出以保持向後相容. 外部 `from
+# ring_of_hands.project_agent.agent import ConfigValidationError` 的呼叫端
+# 不受影響.
 
 
 class FeatureDisabledError(Exception):
@@ -59,7 +68,12 @@ SUPPORTED_MODEL_PATTERNS: tuple[re.Pattern[str], ...] = (
 
 
 def validate_model_name(model: str) -> None:
-    """驗證模型名稱是否符合支援命名規則."""
+    """驗證模型名稱是否符合支援命名規則.
+
+    空字串為合法 (代表走 CLI 預設模型).
+    """
+    if model == "":
+        return
     for pattern in SUPPORTED_MODEL_PATTERNS:
         if pattern.match(model):
             return
@@ -69,37 +83,17 @@ def validate_model_name(model: str) -> None:
     )
 
 
-# Anthropic tool 定義: 要求 LLM 以 submit_action 回傳結構化 action.
-SUBMIT_ACTION_TOOL = LLMToolDefinition(
-    name="submit_action",
-    description=(
-        "提交此 tick 的 action. 必須為以下其中一種: "
-        "{action=move, delta=[dx,dy]}, {action=press, button_id=N}, "
-        "{action=touch_ring}, {action=speak, msg=..., targets=[...]}, "
-        "{action=wait}, {action=observe}."
-    ),
-    input_schema={
-        "type": "object",
-        "properties": {
-            "action": {
-                "type": "string",
-                "enum": ["move", "press", "touch_ring", "speak", "wait", "observe"],
-            },
-            "delta": {
-                "type": "array",
-                "items": {"type": "integer"},
-                "minItems": 2,
-                "maxItems": 2,
-            },
-            "button_id": {"type": "integer", "minimum": 1, "maximum": 6},
-            "msg": {"type": "string"},
-            "targets": {
-                "type": "array",
-                "items": {"type": "integer", "minimum": 1, "maximum": 6},
-            },
-        },
-        "required": ["action"],
-    },
+_DECIDE_JSON_INSTRUCTION = (
+    "\n\n## 回覆格式要求\n"
+    "請直接輸出一個 JSON 物件 (不要附加解釋文字, 不要使用 Markdown code fence).\n"
+    "JSON 格式為以下其中之一:\n"
+    '  - {"action": "move", "delta": [dx, dy]}\n'
+    '  - {"action": "press", "button_id": N}  // 1 <= N <= 6\n'
+    '  - {"action": "touch_ring"}\n'
+    '  - {"action": "speak", "msg": "...", "targets": [pov_id, ...]}\n'
+    '  - {"action": "wait"}\n'
+    '  - {"action": "observe"}\n'
+    "僅輸出 JSON, 勿加任何其他文字."
 )
 
 
@@ -170,7 +164,7 @@ class ProjectAgent:
         try:
             action = parse_action_from_response(response)
         except ActionParseError:
-            # 解析失敗不計入連續 LLM 呼叫失敗 (SDK 層成功; 只是內容有誤).
+            # 解析失敗不計入連續 LLM 呼叫失敗 (CLI 呼叫成功; 只是內容有誤).
             raise
         self._consecutive_failures = 0
         return action
@@ -230,20 +224,22 @@ class ProjectAgent:
             f"{prior_life_json}\n"
             "```"
         )
+        # 3-block system 結構: persona / rules / prior_life. `cache` 欄位
+        # 保留為 informational metadata; `ClaudeCLIClient` 會忽略.
         system_blocks = (
             LLMSystemBlock(text=persona_block_text, cache=True, label="persona"),
             LLMSystemBlock(text=rules_block_text, cache=True, label="rules"),
             LLMSystemBlock(text=prior_life_block_text, cache=True, label="prior_life"),
         )
-        user_text = _format_observation_for_user(observation)
+        user_text = _format_observation_for_user(observation) + _DECIDE_JSON_INSTRUCTION
         messages = (LLMMessage(role="user", content=user_text),)
         return LLMRequest(
             model=self._model,
             system_blocks=system_blocks,
             messages=messages,
             max_tokens=self._max_tokens,
-            tools=(SUBMIT_ACTION_TOOL,),
-            tool_choice={"type": "tool", "name": "submit_action"},
+            tools=(),
+            tool_choice=None,
             temperature=self._temperature,
             timeout_seconds=self._llm_timeout,
             metadata={"purpose": "agent_decide", "tick": observation.tick},
@@ -280,7 +276,7 @@ class ProjectAgent:
             f"你剛聽到 pov_6 對你說: {incoming_msg!r}\n"
             f"你接下來的大略行程: {upcoming_script_hint}\n"
             f"請以 pov_{pov_id} 身份回覆. 回答必須簡短, 並且 MUST 不可透露具體的\n"
-            "tick, 具體的按鈕編號或'我要去拿戒指'等資訊."
+            "tick, 具體的按鈕編號或'我要去拿戒指'等資訊. 直接輸出回覆文字 (不需要 JSON)."
         )
         return LLMRequest(
             model=self._model,
@@ -295,7 +291,11 @@ class ProjectAgent:
         )
 
     def _log_metrics(self, response: LLMResponse, *, kind: str) -> None:
-        """以 structlog 記錄 cache metrics 與 usage."""
+        """以 structlog 記錄 cache metrics 與 usage.
+
+        `cache_read_input_tokens` 與 `cache_creation_input_tokens` 在
+        `ClaudeCLIClient` 下恆為 0; 仍保留輸出以維持 log schema 穩定.
+        """
         structlog_logger.info(
             "llm_call",
             kind=kind,
@@ -353,8 +353,7 @@ def _format_observation_for_user(observation: Observation) -> str:
         "## 當前觀察\n"
         "```json\n"
         + json.dumps(data, ensure_ascii=False, indent=2)
-        + "\n```\n"
-        "請呼叫 submit_action tool 提交此 tick 的動作."
+        + "\n```"
     )
 
 
@@ -363,7 +362,6 @@ __all__ = [
     "FeatureDisabledError",
     "LLMUnavailableError",
     "ProjectAgent",
-    "SUBMIT_ACTION_TOOL",
     "SUPPORTED_MODEL_PATTERNS",
     "validate_model_name",
 ]
