@@ -40,7 +40,10 @@ def _build_parser() -> argparse.ArgumentParser:
     run_parser.add_argument(
         "--dry-run",
         action="store_true",
-        help="使用 FakeAnthropicClient 與 dry_run fixture, 不呼叫真實 LLM",
+        help=(
+            "使用 FakeLLMClient 與 dry_run fixture, 不呼叫真實 LLM. dry-run "
+            "模式不需要 `claude` CLI 已安裝與 `~/.claude/` 存在."
+        ),
     )
     run_parser.add_argument(
         "--log-level",
@@ -88,6 +91,13 @@ def _cmd_run(args: argparse.Namespace) -> int:
         return 3
 
     configure_logging(log_level=args.log_level)
+    logger.info(
+        "啟動 scenario_runner (llm_client=%s, model=%s, cli_path=%s, dry_run=%s)",
+        config.llm_client,
+        config.project_agent_model,
+        config.cli_path,
+        config.dry_run,
+    )
     runner = ScenarioRunner(config, log_dir=args.log_dir)
     summary = runner.run()
 
