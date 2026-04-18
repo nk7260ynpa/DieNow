@@ -2,6 +2,12 @@
 
 每份劇本產出後立即以 `validate_closure` 比對; 失敗則 retry; 超過 `max_retries`
 寫入 `issues.md` 並 raise.
+
+本 change (`migrate-to-claude-cli-subprocess`) 將 structured output 由
+Anthropic tool use 降級為「prompt 誘導 JSON」; 故:
+- `_parse_response_to_script` 改從 `response.text` 讀取 JSON 字串.
+- 支援 Markdown code fence (```json ... ```); 自動去除.
+- `tool_use` 路徑保留為向後相容 fallback (印 DeprecationWarning).
 """
 
 from __future__ import annotations
@@ -9,12 +15,14 @@ from __future__ import annotations
 import datetime as _dt
 import json
 import logging
+import re
+import warnings
 from pathlib import Path
 from typing import Any
 
 from pydantic import ValidationError
 
-from ring_of_hands.llm.base import LLMCallFailedError, LLMClient
+from ring_of_hands.llm.base import LLMCallFailedError, LLMClient, LLMResponse
 from ring_of_hands.script_generator.prompt_builder import (
     build_script_request,
     build_world_environment_block,
@@ -31,6 +39,13 @@ from ring_of_hands.script_generator.validator import (
 
 
 logger = logging.getLogger(__name__)
+
+
+# Markdown code fence ```json ... ``` / ``` ... ```.
+_CODE_FENCE_PATTERN = re.compile(
+    r"```(?:json|JSON)?\s*(?P<body>.*?)\s*```",
+    re.DOTALL,
+)
 
 
 class ScriptGenerationError(Exception):
@@ -52,7 +67,7 @@ class ScriptGenerator:
     """生成 pov_1 ~ pov_5 的閉環劇本.
 
     Args:
-        llm_client: LLMClient 實作 (Anthropic / Fake).
+        llm_client: LLMClient 實作 (ClaudeCLIClient / FakeLLMClient 等).
         personas: 長度 5 的 Persona 清單 (對應 pov_1 ~ pov_5).
         config: ScriptConfig.
         world_environment: 世界環境描述參數.
@@ -140,7 +155,6 @@ class ScriptGenerator:
                 )
                 continue
 
-            # 解析 tool_use 為 Script.
             try:
                 script = self._parse_response_to_script(response, pov_id, prior)
             except ValidationError as exc:
@@ -189,19 +203,16 @@ class ScriptGenerator:
         )
 
     def _parse_response_to_script(
-        self, response: Any, pov_id: int, prior: Script | None
+        self, response: LLMResponse, pov_id: int, prior: Script | None
     ) -> Script:
-        """將 LLMResponse 的 tool_use 轉為 Script."""
-        tool_use = getattr(response, "tool_use", None) or response.tool_use
-        if tool_use is None:
-            raise ScriptGenerationError("LLM 未使用 produce_script tool")
-        if tool_use.get("name") not in (None, "produce_script"):
-            raise ScriptGenerationError(
-                f"LLM 使用了非預期的 tool: {tool_use.get('name')}"
-            )
-        payload = tool_use.get("input")
-        if not isinstance(payload, dict):
-            raise ScriptGenerationError("tool_use.input 必須為 dict")
+        """將 LLMResponse 轉為 Script.
+
+        解析優先順序:
+        1. `response.text` 為 JSON 字串 (主要路徑, 自動去除 Markdown
+           code fence).
+        2. `response.tool_use.input` (向後相容 fallback).
+        """
+        payload = _extract_script_payload(response)
         if int(payload.get("pov_id", 0)) != pov_id:
             raise ScriptGenerationError(
                 f"回傳的 pov_id ({payload.get('pov_id')}) 與預期 ({pov_id}) 不符"
@@ -254,6 +265,68 @@ class ScriptGenerator:
         with self._issues_md_path.open("a", encoding="utf-8") as fh:
             fh.write("\n".join(lines))
             fh.write("\n")
+
+
+def _strip_code_fence(text: str) -> str:
+    """若 text 被 Markdown code fence 包住則去除; 否則原樣回傳."""
+    stripped = text.strip()
+    match = _CODE_FENCE_PATTERN.search(stripped)
+    if match:
+        return match.group("body").strip()
+    return stripped
+
+
+def _extract_script_payload(response: LLMResponse) -> dict[str, Any]:
+    """從 LLMResponse 解析出 Script dict.
+
+    主要路徑: `response.text` 為 JSON 字串 (可能包 Markdown code fence).
+    Fallback: `response.tool_use.input` (向後相容).
+
+    Raises:
+        ScriptGenerationError: 無法解析 / 非 dict / 兩路徑皆無.
+    """
+    text = (response.text or "").strip()
+    if text:
+        cleaned = _strip_code_fence(text)
+        try:
+            payload = json.loads(cleaned)
+        except json.JSONDecodeError as exc:
+            if response.tool_use is not None:
+                return _extract_from_tool_use(response.tool_use)
+            raise ScriptGenerationError(
+                f"response.text 非合法 JSON: {exc}"
+            ) from exc
+        if not isinstance(payload, dict):
+            raise ScriptGenerationError(
+                f"response.text 必須為 JSON 物件, 實際型別: {type(payload).__name__}"
+            )
+        return payload
+
+    if response.tool_use is not None:
+        return _extract_from_tool_use(response.tool_use)
+    raise ScriptGenerationError("LLM 回應為空 (text 與 tool_use 皆缺)")
+
+
+def _extract_from_tool_use(tool_use: dict[str, Any]) -> dict[str, Any]:
+    """向後相容: 從 tool_use.input 取 script dict."""
+    warnings.warn(
+        (
+            "script_generator 偵測到 LLMResponse.tool_use 欄位; 此路徑為向後"
+            "相容 fallback, 將於未來 change 移除. 請確保 fixture 以 "
+            "response.text JSON 字串承載 script."
+        ),
+        DeprecationWarning,
+        stacklevel=4,
+    )
+    name = tool_use.get("name")
+    if name not in (None, "produce_script"):
+        raise ScriptGenerationError(
+            f"LLM 使用了非預期的 tool: {name}"
+        )
+    payload = tool_use.get("input")
+    if not isinstance(payload, dict):
+        raise ScriptGenerationError("tool_use.input 必須為 dict")
+    return payload
 
 
 __all__ = [
