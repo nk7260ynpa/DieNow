@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from ring_of_hands.llm.fake_client import FakeAnthropicClient, FakeClientFixture
+from ring_of_hands.llm.fake_client import FakeClientFixture, FakeLLMClient
 from ring_of_hands.scenario_runner.config_loader import load_config
 from ring_of_hands.scenario_runner.runner import ScenarioRunner
 
@@ -46,12 +46,11 @@ class TestTimeoutFailPath:
             CONFIGS_DIR / "default.yaml",
             personas_path=CONFIGS_DIR / "personas.yaml",
             dry_run=True,
-            env_overrides={"ANTHROPIC_API_KEY": ""},
         )
         runner = ScenarioRunner(
             config,
             log_dir=tmp_path / "logs",
-            llm_client_override=FakeAnthropicClient(fixture),
+            llm_client_override=FakeLLMClient(fixture),
             fake_fixture_override=fixture,
         )
         summary = runner.run()

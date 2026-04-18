@@ -19,10 +19,9 @@ class TestFullWinPath:
         monkeypatch: pytest.MonkeyPatch,
         capsys: pytest.CaptureFixture[str],
     ) -> None:
-        """以 FakeAnthropicClient + dry_run.yaml 從 CLI 層執行 happy path."""
+        """以 FakeLLMClient + dry_run.yaml 從 CLI 層執行 happy path."""
         from ring_of_hands.cli import main
 
-        monkeypatch.setenv("ANTHROPIC_API_KEY", "")
         log_dir = tmp_path / "logs"
         code = main(
             [

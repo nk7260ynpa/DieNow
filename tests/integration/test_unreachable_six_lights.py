@@ -4,9 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
-
-from ring_of_hands.llm.fake_client import FakeAnthropicClient, FakeClientFixture
+from ring_of_hands.llm.fake_client import FakeClientFixture, FakeLLMClient
 from ring_of_hands.scenario_runner.config_loader import load_config
 from ring_of_hands.scenario_runner.runner import ScenarioRunner
 
@@ -21,13 +19,6 @@ class TestUnreachableSixLights:
         # 改為: pov_3 press button_2 (距離遠, 視為 out_of_range 被拒絕).
         # 我們改讓 pov_3 press button_2 但先移到 button_2 鄰接位置 → 按錯
         # 死亡 (按錯→corpse).
-        # body_3=(4,1), button_2=(2,7). chebyshev 距離=6.
-        # 簡化: 讓 pov_3 press button_2 直接出 out_of_range, 仍活著.
-        # 為引發死亡, 改造: pov_3 press button_5 (body_3=(4,1), button_5=
-        # (7,2) → distance=3, 仍 out of range).
-        #
-        # 改做法: 讓 pov_3 移到鄰接 button_1=(2,2) 然後 press button_1 →
-        # body_3=3 != button_id=1 → death.
         scripts = []
         for i in range(1, 6):
             events = []
@@ -83,12 +74,11 @@ class TestUnreachableSixLights:
             CONFIGS_DIR / "default.yaml",
             personas_path=CONFIGS_DIR / "personas.yaml",
             dry_run=True,
-            env_overrides={"ANTHROPIC_API_KEY": ""},
         )
         runner = ScenarioRunner(
             config,
             log_dir=tmp_path / "logs",
-            llm_client_override=FakeAnthropicClient(fixture),
+            llm_client_override=FakeLLMClient(fixture),
             fake_fixture_override=fixture,
         )
         summary = runner.run()
