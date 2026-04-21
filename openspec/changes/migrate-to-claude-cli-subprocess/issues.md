@@ -78,7 +78,7 @@ Claude Code CLI v2.1.114 有官方指令 `claude setup-token`（`claude --help` 
 
 ---
 
-## [Specialist] [2026-04-18T23:00:00+08:00] [嚴重度: MED] scenario-runner spec 的「Docker 化執行環境 / CLI 預啟動檢查」幾個 Scenario 已與實作脫節，請 Coordinator 評估是否 spec 補丁
+## [Specialist] [2026-04-18T23:00:00+08:00] [嚴重度: MED] [狀態: RESOLVED @ 2026-04-21 by Coordinator] scenario-runner spec 的「Docker 化執行環境 / CLI 預啟動檢查」幾個 Scenario 已與實作脫節，請 Coordinator 評估是否 spec 補丁
 
 ### 實作現況（修復後）
 
@@ -101,3 +101,35 @@ Claude Code CLI v2.1.114 有官方指令 `claude setup-token`（`claude --help` 
 ### 驗證實況
 
 本次修復的所有測試 232 筆全部通過；spec 與實作的語意差異僅在上述 Scenario 文字層面，行為一致性由實作 + issues.md 追記維持。若 Verifier 因 spec 文字與實作有差異而 FAIL，請參考本條目；不應要求 Specialist 回到 `~/.claude/ mount` 方案（已證實不可行）。
+
+---
+
+## [Coordinator] [2026-04-21T10:30:00+08:00] [嚴重度: LOW] scenario-runner spec 補丁完成，同步至 `CLAUDE_CODE_OAUTH_TOKEN` env 認證方案
+
+### 摘要
+
+依 Specialist MED 條目建議，對 `specs/scenario-runner/spec.md` 進行文字層補丁，使 spec 與修復後的實作（`CLAUDE_CODE_OAUTH_TOKEN` env 注入方案）一致。**未變動任何實作程式碼、未修改 `tasks.md`／`proposal.md`／`design.md`**。
+
+### 實際修改清單
+
+1. **Requirement「CLI 入口與設定載入」描述**：啟動檢查第 3 步由「`CLAUDE_HOME` 目錄可讀」改為「`CLAUDE_CODE_OAUTH_TOKEN` 或 `ANTHROPIC_API_KEY` env 其一存在」；`.env` 讀取變數清單補上 token 欄位；錯誤訊息提示改為 `claude setup-token`。
+2. **Scenario「預設設定啟動成功」**：前置條件由「`~/.claude/` 目錄存在」改為「`CLAUDE_CODE_OAUTH_TOKEN` 非空」。
+3. **Scenario「`~/.claude/` 不存在時非零退出」→「`CLAUDE_CODE_OAUTH_TOKEN` 缺失時非零退出」**：GIVEN/WHEN/THEN 全面改寫為 env 變數缺失情境；stderr 建議訊息改為 `claude setup-token` 流程。
+4. **Scenario「dry-run 不要求 claude CLI 與 ~/.claude/」→「dry-run 不要求 claude CLI 與 OAuth token」**：前置條件改為 token env 未設定亦可通過。
+5. **Requirement「Docker 化執行環境」描述**：`docker-compose.yaml` bullet 由「mount `${HOME}/.claude`」改為「`env_file: ../.env` 注入 `CLAUDE_CODE_OAUTH_TOKEN`」，並明示「MUST NOT 掛載 `${HOME}/.claude`／`${HOME}/.claude.json`」（macOS Keychain 跨容器限制）；`run.sh` bullet 改為檢查 `.env` 中的 token 存在性；`.env.example` bullet 新增 `CLAUDE_CODE_OAUTH_TOKEN=` 欄位說明並將 `CLAUDE_HOME` 標為向後相容。
+6. **Scenario「run.sh 啟動 container 並執行 CLI」**：前置條件由「主機 `claude` 可執行且 `~/.claude/` 存在」改為「`.env` 含有非空 `CLAUDE_CODE_OAUTH_TOKEN`（或 dry-run）」。
+7. **Scenario「run.sh 在主機缺 claude 時先行阻擋」**：**刪除**（容器內自帶 CLI，主機檢查已失去意義）。
+8. **Scenario「run.sh 在 ~/.claude/ 缺失時阻擋」→「run.sh 在 .env 缺 `CLAUDE_CODE_OAUTH_TOKEN` 時阻擋」**：改為檢查 `.env` 檔中 token 欄位。
+9. **Scenario「容器內 claude 能讀到主機 OAuth session」→「容器內 claude 以 `CLAUDE_CODE_OAUTH_TOKEN` 承繼 Max 訂閱身份」**：GIVEN/WHEN/THEN 全面改寫為 env_file 注入路徑；THEN 補上 `--verbose` 旗標與「非 401」的實測條件。
+10. **Requirement「README 記載架構」描述與兩個相關 Scenario**：`claude login` 全面改為 `claude setup-token`；`~/.claude/ not found` 故障排除改為 `CLAUDE_CODE_OAUTH_TOKEN missing`；README 前置章節順序改為「安裝 CLI → setup-token → 寫 `.env`」。
+
+### 影響範圍
+
+- 僅修改 `specs/scenario-runner/spec.md`。
+- 未動 `proposal.md`（動機無變）、`design.md`（D-5/D-6 的歷史設計意圖保留作為 context；實際實作已透過本 change 諸多 commits 演進到 env token 方案）、`tasks.md`（所有 task 已完成）。
+- 本補丁為 **文字層補丁**，不要求 Specialist 重新 apply；但 Verifier 下一次 `/opsx:verify` 應能以此 spec 作為 baseline 無縫通過。
+
+### 後續追蹤
+
+- 真跑人工驗收（Pending A）仍待使用者完成。
+- `design.md` 的 D-5/D-6 與現實不符之處，若未來做更嚴謹的 design 同步，可另開補丁 change（或於 archive 前於 design.md 頂端 append 一段「Amendment 2026-04-18」註記）。本次不動 design.md 以控制 scope。
