@@ -5,7 +5,7 @@
 The system SHALL 提供 `ProjectAgent` 類別，以 Claude Code CLI 的非互動模式（`claude -p "<prompt>" --output-format stream-json [--model <model_id>]`）透過 `subprocess` 呼叫進行 pov_6 的每 tick 決策；模型預設為 `claude-sonnet-4-7`，可由環境變數 `PROJECT_AGENT_MODEL` 或 `ScenarioConfig.project_agent_model` 覆寫並轉為 CLI `--model` 旗標；`ProjectAgent` MUST 僅依賴 `LLMClient` 介面，生產環境注入 `ClaudeCLIClient`，測試期以 `FakeLLMClient` 替身執行；`FakeLLMClient` MUST 可於離線環境下完整驅動 pov_6 的決策流程。
 
 #### Scenario: 正常透過 Claude CLI 呼叫
-- **GIVEN** 主機已執行 `claude login` 且 `~/.claude/` 存在
+- **GIVEN** `.env` 含有非空 `CLAUDE_CODE_OAUTH_TOKEN`（或 `ANTHROPIC_API_KEY`）且已注入容器 environment
 - **AND** `CLAUDE_CLI_PATH=claude` 且 `claude --version` 執行成功
 - **AND** `PROJECT_AGENT_MODEL=claude-sonnet-4-7`
 - **WHEN** pov_6 於 tick 5 呼叫 `project_agent.decide(observation)`
@@ -25,11 +25,12 @@ The system SHALL 提供 `ProjectAgent` 類別，以 Claude Code CLI 的非互動
 - **WHEN** scenario-runner 嘗試建立 `ClaudeCLIClient`
 - **THEN** 建構子 MUST raise `ConfigValidationError`，reason 含 `"claude CLI 不可執行"` 或等效訊息
 
-#### Scenario: `~/.claude/` 不存在時啟動失敗
-- **GIVEN** `CLAUDE_CLI_PATH=claude` 可執行且 `claude --version` exit 0
-- **AND** 主機 `~/.claude/` 目錄不存在（使用者未 `claude login`）
-- **WHEN** scenario-runner 嘗試建立 `ClaudeCLIClient`
-- **THEN** 建構子 MUST raise `ConfigValidationError`，reason 含 `"請先執行 claude login"` 或等效可操作建議
+#### Scenario: `ClaudeCLIClient` 不重複做認證環境檢查
+- **GIVEN** scenario-runner 已於 `config_loader._validate_claude_cli_environment` 完成 3 步預啟動檢查（CLI 存在 / `claude --version` 成功 / `CLAUDE_CODE_OAUTH_TOKEN` 或 `ANTHROPIC_API_KEY` 至少其一存在）
+- **WHEN** scenario-runner 以已驗證過的環境建立 `ClaudeCLIClient`
+- **THEN** `ClaudeCLIClient.__init__` MUST NOT 重複檢查 `~/.claude/` 目錄、token env 或 CLI 版本
+- **AND** `claude_home` kwarg 已 deprecated；若被傳入僅作向後相容容忍，不影響行為
+- **AND** 缺失 token env 導致的啟動失敗由 `config_loader` 層拋出 `ConfigValidationError`（詳見 scenario-runner spec 的「`CLAUDE_CODE_OAUTH_TOKEN` 缺失時非零退出」Scenario），不由此建構子負責
 
 ### Requirement: Prompt 結構（無 caching）
 

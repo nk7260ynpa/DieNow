@@ -1,8 +1,11 @@
 # syntax=docker/dockerfile:1.7
 # 攜手之戒關卡執行環境 Docker image.
 # 以 Python 3.11-slim 為基底, 安裝 pyproject 相依與 Claude Code CLI,
-# 並以非 root user 執行. 容器內的 `claude` 會讀取主機 `~/.claude` (由
-# docker-compose bind mount 掛入) 以承繼 Max 訂閱 OAuth session.
+# 並以非 root user 執行. 容器內的 `claude` 以環境變數
+# `CLAUDE_CODE_OAUTH_TOKEN` (由 docker-compose 的 env_file 從 `.env`
+# 注入; 以 `claude setup-token` 取得) 承繼 Max 訂閱身份;
+# 不再以 bind mount `~/.claude` 的方式承繼 OAuth session, 因 macOS
+# Keychain 儲存的 token 無法跨容器讀取.
 
 FROM python:3.11-slim AS base
 
@@ -68,7 +71,9 @@ COPY tests/ ./tests/
 COPY run.sh ./run.sh
 
 # logs 目錄需允許非 root 寫入; 由 docker-compose 掛載宿主機 logs/ 覆蓋.
-# /home/app/.claude 目錄由 docker-compose bind mount 掛入主機 ~/.claude.
+# 認證以 `CLAUDE_CODE_OAUTH_TOKEN` env 為主 (見檔頭註解); 保留
+# `/home/app/.claude` 空目錄僅為 CLI 可能寫入 cache/log 之便, 不再
+# 承擔認證載體角色.
 RUN mkdir -p /app/logs /home/app/.claude \
     && chown -R app:app /app /home/app
 

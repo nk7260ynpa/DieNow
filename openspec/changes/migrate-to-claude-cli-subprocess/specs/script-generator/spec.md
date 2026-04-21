@@ -12,10 +12,10 @@ The system SHALL 以介面 `LLMClient` 抽象所有 LLM 呼叫；生產環境使
 
 #### Scenario: 正式執行時使用 ClaudeCLIClient
 - **GIVEN** `ScenarioConfig.llm_client="claude_cli"`（或等效設定）
-- **AND** 主機已執行 `claude login` 且 `~/.claude/` 存在
+- **AND** `.env` 含有非空 `CLAUDE_CODE_OAUTH_TOKEN`（或 `ANTHROPIC_API_KEY`）並由 docker-compose 透過 `env_file` 注入容器 environment
 - **WHEN** scenario-runner 啟動
 - **THEN** `script-generator` 收到的 `LLMClient` 實例 MUST 為 `ClaudeCLIClient`
-- **AND** 該 instance 的每次 `call` MUST 透過 `subprocess.run` 執行 `claude -p "<prompt>" --output-format stream-json`
+- **AND** 該 instance 的每次 `call` MUST 透過 `subprocess.run` 執行 `claude -p "<prompt>" --output-format stream-json --verbose`
 
 #### Scenario: 正式執行時 claude CLI 未安裝則啟動失敗
 - **GIVEN** 主機 PATH 中無 `claude` 指令
@@ -23,7 +23,7 @@ The system SHALL 以介面 `LLMClient` 抽象所有 LLM 呼叫；生產環境使
 - **WHEN** scenario-runner 嘗試建構 `ClaudeCLIClient`
 - **THEN** MUST raise `ConfigValidationError`
 - **AND** 不呼叫任何 LLM 端點
-- **AND** stderr 含可操作建議（提示安裝 CLI 與執行 `claude login`）
+- **AND** stderr 含可操作建議（提示以 `curl -fsSL https://claude.ai/install.sh | bash` 安裝 CLI，或於 `pip`／主機環境確認 CLI 於 PATH；以及執行 `claude setup-token` 取得 long-lived OAuth token 後寫入 `.env` 的 `CLAUDE_CODE_OAUTH_TOKEN`）
 
 ### Requirement: 依序產生 5 份閉環劇本
 

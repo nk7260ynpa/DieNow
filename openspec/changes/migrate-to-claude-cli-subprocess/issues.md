@@ -133,3 +133,35 @@ Claude Code CLI v2.1.114 有官方指令 `claude setup-token`（`claude --help` 
 
 - 真跑人工驗收（Pending A）仍待使用者完成。
 - `design.md` 的 D-5/D-6 與現實不符之處，若未來做更嚴謹的 design 同步，可另開補丁 change（或於 archive 前於 design.md 頂端 append 一段「Amendment 2026-04-18」註記）。本次不動 design.md 以控制 scope。
+
+---
+
+## [Coordinator] [2026-04-21T14:30:00+08:00] [嚴重度: LOW] project-agent 與 script-generator spec 第二輪補丁 + Dockerfile 註解順手更新
+
+### 摘要
+
+依 Verifier 第 3/4 次 PASS with observation 所列殘留漂移，對 `specs/project-agent/spec.md` 與 `specs/script-generator/spec.md` 進行文字層補丁，使其與已修復實作（`CLAUDE_CODE_OAUTH_TOKEN` env 方案、`config_loader._validate_claude_cli_environment` 預啟動檢查、`ClaudeCLIClient.__init__` 不重複檢查環境）一致；並順手更新 `docker/Dockerfile` 兩處過時註解。未變動任何實作程式邏輯、未修改 `tasks.md`／`proposal.md`／`design.md`。
+
+### 實際修改清單
+
+1. **`specs/project-agent/spec.md`** — Scenario「正常透過 Claude CLI 呼叫」：GIVEN 由「主機已執行 `claude login` 且 `~/.claude/` 存在」改為「`.env` 含有非空 `CLAUDE_CODE_OAUTH_TOKEN`（或 `ANTHROPIC_API_KEY`）且已注入容器 environment」。
+2. **`specs/project-agent/spec.md`** — Scenario「`~/.claude/` 不存在時啟動失敗」：**改寫**為「`ClaudeCLIClient` 不重複做認證環境檢查」。理由（選擇這個方案的原因）：實作已將認證檢查職責遷至 `config_loader._validate_claude_cli_environment`；單純刪除 Scenario 會失去對「project-agent 層不重複檢查」這個正向契約的描述；改寫為正向契約能保留職責邊界描述並明示 token 缺失時的 Fail 責任歸屬於 scenario-runner spec，避免 spec 漏洞。`claude_home` kwarg 的 deprecated 狀態亦在此 Scenario 明示。
+3. **`specs/script-generator/spec.md`** — Scenario「正式執行時使用 ClaudeCLIClient」：GIVEN 由「主機已執行 `claude login` 且 `~/.claude/` 存在」改為 `env_file` 注入 token 的情境；THEN 補上 `--verbose` 旗標（與 scenario-runner spec 一致，呼應 `-p + stream-json` 強制要求）。
+4. **`specs/script-generator/spec.md`** — Scenario「正式執行時 claude CLI 未安裝則啟動失敗」的 stderr 建議訊息：由「提示安裝 CLI 與執行 `claude login`」改為「提示安裝 CLI（`curl -fsSL https://claude.ai/install.sh | bash` 或 PATH 檢查）並執行 `claude setup-token` 後寫入 `.env` 的 `CLAUDE_CODE_OAUTH_TOKEN`」，用詞對齊 `config_loader._validate_claude_cli_environment` 的實際錯誤訊息（L198-202 / L227-230）。
+5. **`docker/Dockerfile`** — L2-5 header comment：由「容器內的 claude 會讀取主機 `~/.claude`」改為「容器內的 claude 以 `CLAUDE_CODE_OAUTH_TOKEN` env 承繼身份；不再 bind mount `~/.claude`」，並補充 macOS Keychain 限制註記。
+6. **`docker/Dockerfile`** — L71 附近 `mkdir -p /home/app/.claude` 前註解：由「由 docker-compose bind mount 掛入主機 ~/.claude」改為「認證走 env；保留空目錄僅為 CLI 可能寫入 cache/log 之便」。空目錄本身保留（無害）。
+
+### Dockerfile 動作的權限判斷
+
+純註解行不涉及 Python/shell 實作邏輯、不影響 runtime 行為、不影響測試，視為文件層補丁，Coordinator 可觸及；未動 `RUN`／`COPY`／`CMD` 等任何會影響 image build 結果的指令（`mkdir -p /home/app/.claude` 維持原狀）。若後續 Verifier 仍認為此處應由 Specialist 處理，可以 reverted 並改由 Specialist 接手；但目前邊界判斷傾向這是最輕量、最安全的補丁。
+
+### 影響範圍
+
+- 文件層補丁，僅修改 spec（2 檔）+ Dockerfile 註解（2 處）。
+- 未變動任何 Python／shell 實作邏輯，不需要 Specialist 重新 apply。
+- 預期 Verifier 第 4/4 次執行可以乾淨 PASS（殘留漂移已全部收斂）。
+
+### 後續追蹤
+
+- 真跑人工驗收（Pending A）仍由使用者端完成。
+- 若 Verifier 第 4 次仍 FAIL，依 CLAUDE.md 規範停止自動迴圈並交人類。
