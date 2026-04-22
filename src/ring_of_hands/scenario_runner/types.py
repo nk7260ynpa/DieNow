@@ -47,10 +47,10 @@ class ScenarioConfig(BaseModel):
     max_retries: int = Field(ge=1, default=3)
     max_speak_length: int = Field(ge=1, default=512)
     enable_realtime_chat: bool = True
-    llm_timeout_seconds: float = Field(gt=0.0, default=30.0)
+    llm_timeout_seconds: float = Field(gt=0.0, default=180.0)
 
     llm_client: Literal["claude_cli", "fake"] = "claude_cli"
-    project_agent_model: str = "claude-sonnet-4-7"
+    project_agent_model: str = "claude-sonnet-4-6"
 
     # Claude CLI 相關設定.
     cli_path: str = "claude"
