@@ -165,3 +165,63 @@ Claude Code CLI v2.1.114 有官方指令 `claude setup-token`（`claude --help` 
 
 - 真跑人工驗收（Pending A）仍由使用者端完成。
 - 若 Verifier 第 4 次仍 FAIL，依 CLAUDE.md 規範停止自動迴圈並交人類。
+
+---
+
+## [使用者驗收] [2026-04-22T00:50:00+08:00] [嚴重度: INFO] 真跑驗收 PASS（認證機制通過；但發現 3 個非本 change 範圍內的新問題）
+
+### 驗收流程
+
+1. 主機執行 `claude setup-token` 取得 long-lived OAuth token
+2. 貼入 `/Users/chen/AI/DieNow/.env` 的 `CLAUDE_CODE_OAUTH_TOKEN=`
+3. `./run.sh --dry-run` → WIN（迴歸通過）
+4. `./run.sh`（真跑）→ 行為如下記錄
+
+### 認證機制驗收結果: ✅ PASS
+
+- 容器內 CLI 透過 `CLAUDE_CODE_OAUTH_TOKEN` env 成功認證（`apiKeySource:"none"`、`is_error:false`）
+- **不再出現 `401 authentication_error`**（本 change 核心修復目標達成）
+- pov_1 劇本成功生成（耗時 ~63 秒）
+
+按進度筆記 Pending A 的 PASS 判定：「不可因 `401 authentication_error` 失敗；outcome 為 WIN 或合理 FAIL 均算通過」——符合。
+
+### 本次真跑 outcome: FAIL（合理 FAIL，非認證問題）
+
+- `outcome.result="FAIL"`, `cause="script_generation_failed"`
+- 根因：script_2 在 3 次 retry 中出現 2 次 timeout + 1 次閉環驗證失敗（LLM 產出跨 pov 對白不一致）
+- 此類 FAIL 屬「LLM 品質／劇本一致性」議題，與本 change 「CLI subprocess 遷移 + 認證機制」目標正交
+
+### 另附發現的 3 個新問題（建議另開 change 處理，不阻擋本 change archive）
+
+#### 問題 1（HIGH）: 預設模型名稱 `claude-sonnet-4-7` 不存在
+
+- 事實：2026-04 當前 Claude 4.X 家族為 Sonnet **4.6**、Opus 4.7、Haiku 4.5；不存在 sonnet-4-7
+- 影響位置：
+  - `configs/default.yaml` L47 `project_agent_model: "claude-sonnet-4-7"`
+  - `src/ring_of_hands/scenario_runner/config_loader.py` L110 預設值
+  - `src/ring_of_hands/scenario_runner/types.py` L53 `project_agent_model: str = "claude-sonnet-4-7"`
+  - `src/ring_of_hands/script_generator/types.py` L98 `model: str = "claude-sonnet-4-6"`（原文 `4-7`）
+- 觸發症狀：CLI 回應 `api_error_status:404 "model may not exist"`，`subprocess` 以 returncode=1 退出，上層僅見 `cli_nonzero_exit:1`（無具體錯誤）
+- 建議：新 change 修為 `claude-sonnet-4-6`；spec 中「模型版本可配置」Requirement 的 Scenario 亦需同步
+
+#### 問題 2（MED）: 預設 timeout 30s 對劇本生成不足
+
+- 事實：pov_1 劇本（長 prompt + 結構化 JSON 輸出 + 5-event 閉環）實測耗時 60-180s
+- 影響位置：
+  - `.env.example` 提示 `CLAUDE_CLI_TIMEOUT_SECONDS=30` 過短
+  - `src/ring_of_hands/llm/claude_cli_client.py` 預設 `timeout_seconds=30.0`
+- 建議：新 change 將預設調至 180-240s；或依呼叫種類區分（`decide` 短、`generate_script` 長）
+
+#### 問題 3（LOW，設計層）: 閉環驗證策略過於脆弱
+
+- 事實：script_generator 的閉環驗證（`script_n.events` 中涉及 `n-1` 的事件 MUST 與 `script_{n-1}` 完全一致）要求 LLM 跨 pov 產出逐字一致的對白；LLM 在 retry 間產出文字幾乎必有微幅差異
+- 當前表現：即便延長 timeout，pov_2 仍因閉環 diff FAIL；3 次 retry 全用完即終止關卡
+- 建議方向（需設計討論，不一定要立即改）：
+  - (a) 放寬比對策略至「語義一致性」或「結構一致性」（action_type / target / t 一致即可，payload.msg 可 fuzzy 比對）
+  - (b) 提高 `max_retries` 預設（5-8 次）並於 prompt 更強烈地傳達「必須 copy 前一劇本字面」
+  - (c) 改為「前 n-1 份劇本固定為 LLM 已產出、後續 pov 的劇本以「引用」方式建構」而非獨立生成
+  - 屬於 scenario-level 設計議題，建議另開獨立 change 評估
+
+### archive 建議
+
+**可立即 archive**：本 change（`migrate-to-claude-cli-subprocess`）的核心目標——將 LLM 後端從 Anthropic SDK 遷移至 Claude CLI subprocess、支援 Max 訂閱認證——已達成並通過真跑驗收。上述 3 個問題均屬 scenario-runner 預設配置／LLM 呼叫策略層，非本 change 範圍，應另立 change 處理（建議命名 `fix-default-model-and-timeouts` 處理問題 1+2，問題 3 可延後評估）。
