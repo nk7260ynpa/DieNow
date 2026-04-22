@@ -128,6 +128,14 @@ class TestStartupChecks:
         )
         assert client is not None
 
+    def test_claude_cli_client_default_timeout_is_180(self) -> None:
+        """對應 change fix-default-model-and-timeouts: default timeout=180s."""
+        client = ClaudeCLIClient(
+            cli_path="any",
+            skip_startup_checks=True,
+        )
+        assert client._timeout_seconds == 180.0
+
 
 # ---------------------------------------------------------------------------
 # call(): subprocess 命令組裝

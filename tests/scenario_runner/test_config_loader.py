@@ -264,6 +264,83 @@ class TestTimeoutOverride:
         assert cfg.llm_timeout_seconds == 60.0
 
 
+# 用於 default 測試: 不含 project_agent_model 與 llm_timeout_seconds 欄位,
+# 使 load_config 走 fallback default.
+_CONFIG_YAML_NO_OVERRIDES = """
+room_size: [10, 10]
+body_start_positions: [[1,1],[1,8],[4,1],[4,8],[8,1],[8,8]]
+button_positions: [[2,2],[2,7],[5,2],[5,7],[7,2],[7,7]]
+ring_position: [5,5]
+max_ticks: 50
+max_retries: 3
+enable_realtime_chat: true
+llm_client: fake
+dry_run_fixture_path: tests/fixtures/dry_run.yaml
+pov6_persona:
+  name: 被困的玩家
+  description: d
+  traits: [cautious]
+"""
+
+
+@pytest.fixture
+def configs_dir_no_overrides(tmp_path: Path) -> Path:
+    """建立不含 project_agent_model / llm_timeout_seconds 的 configs 目錄."""
+    d = tmp_path / "configs"
+    d.mkdir()
+    (d / "default.yaml").write_text(_CONFIG_YAML_NO_OVERRIDES, encoding="utf-8")
+    (d / "personas.yaml").write_text(PERSONAS_YAML, encoding="utf-8")
+    return d
+
+
+class TestDefaults:
+    """對應 change fix-default-model-and-timeouts: 新 default 值."""
+
+    def test_default_model_is_sonnet_4_6(
+        self,
+        configs_dir_no_overrides: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """空 env + 無 YAML override → project_agent_model 取 sonnet-4-6."""
+        monkeypatch.delenv("PROJECT_AGENT_MODEL", raising=False)
+        monkeypatch.delenv("CLAUDE_CLI_TIMEOUT_SECONDS", raising=False)
+        cfg = load_config(configs_dir_no_overrides / "default.yaml")
+        assert cfg.project_agent_model == "claude-sonnet-4-6"
+
+    def test_default_timeout_is_180(
+        self,
+        configs_dir_no_overrides: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """空 env + 無 YAML override → llm_timeout_seconds 取 180.0."""
+        monkeypatch.delenv("PROJECT_AGENT_MODEL", raising=False)
+        monkeypatch.delenv("CLAUDE_CLI_TIMEOUT_SECONDS", raising=False)
+        cfg = load_config(configs_dir_no_overrides / "default.yaml")
+        assert cfg.llm_timeout_seconds == 180.0
+
+    def test_env_overrides_model(
+        self,
+        configs_dir_no_overrides: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """PROJECT_AGENT_MODEL env 覆寫 fallback default."""
+        monkeypatch.setenv("PROJECT_AGENT_MODEL", "claude-opus-4-7")
+        cfg = load_config(configs_dir_no_overrides / "default.yaml")
+        assert cfg.project_agent_model == "claude-opus-4-7"
+
+    def test_yaml_overrides_timeout(
+        self, configs_dir_no_overrides: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """YAML 指定 llm_timeout_seconds 時覆寫 default."""
+        monkeypatch.delenv("CLAUDE_CLI_TIMEOUT_SECONDS", raising=False)
+        yaml_with_timeout = _CONFIG_YAML_NO_OVERRIDES + "llm_timeout_seconds: 60\n"
+        (configs_dir_no_overrides / "default.yaml").write_text(
+            yaml_with_timeout, encoding="utf-8"
+        )
+        cfg = load_config(configs_dir_no_overrides / "default.yaml")
+        assert cfg.llm_timeout_seconds == 60.0
+
+
 class TestDryRunFixture:
     def test_dry_run_missing_fixture(
         self, configs_dir: Path, tmp_path: Path
