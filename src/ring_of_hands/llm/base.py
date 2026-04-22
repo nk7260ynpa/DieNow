@@ -65,7 +65,7 @@ class LLMRequest(BaseModel):
     tools: tuple[LLMToolDefinition, ...] = ()
     tool_choice: dict[str, Any] | None = None
     temperature: float = 0.7
-    timeout_seconds: float = 30.0
+    timeout_seconds: float = 180.0
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 

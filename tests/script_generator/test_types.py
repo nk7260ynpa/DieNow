@@ -14,6 +14,7 @@ from pydantic import ValidationError
 from ring_of_hands.script_generator.types import (
     Persona,
     Script,
+    ScriptConfig,
     ScriptEvent,
 )
 
@@ -87,6 +88,21 @@ class TestScriptStructure:
                 ),
                 death_cause="timeout",
             )
+
+    def test_script_generator_config_defaults(self) -> None:
+        """對應 change fix-default-model-and-timeouts:
+        ScriptConfig (別名 ScriptGeneratorConfig) 預設值為 sonnet-4-6 / 180s."""
+        cfg = ScriptConfig()
+        assert cfg.model == "claude-sonnet-4-6"
+        assert cfg.llm_timeout_seconds == 180.0
+
+    def test_script_generator_config_override_timeout(self) -> None:
+        """對應 spec scenario「顯式覆寫 timeout 不受預設影響」:
+        顯式傳入 llm_timeout_seconds=90.0 後, timeout 採覆寫值,
+        其餘未傳欄位 (model) 仍維持預設 claude-sonnet-4-6."""
+        cfg = ScriptConfig(llm_timeout_seconds=90.0)
+        assert cfg.llm_timeout_seconds == 90.0
+        assert cfg.model == "claude-sonnet-4-6"
 
     def test_last_event_actor_must_match_pov(self) -> None:
         with pytest.raises(ValidationError):

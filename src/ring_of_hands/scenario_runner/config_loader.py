@@ -107,7 +107,7 @@ def load_config(
         llm_client = llm_client_raw
 
     model = env.get("PROJECT_AGENT_MODEL") or raw.get(
-        "project_agent_model", "claude-sonnet-4-7"
+        "project_agent_model", "claude-sonnet-4-6"
     )
     cli_path = env.get("CLAUDE_CLI_PATH") or raw.get("cli_path", "claude")
     claude_home = (
@@ -118,7 +118,7 @@ def load_config(
     try:
         llm_timeout_seconds = float(
             env.get("CLAUDE_CLI_TIMEOUT_SECONDS")
-            or raw.get("llm_timeout_seconds", 30.0)
+            or raw.get("llm_timeout_seconds", 180.0)
         )
     except ValueError as exc:
         raise ConfigValidationError(

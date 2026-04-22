@@ -35,12 +35,21 @@ class TestLLMTypes:
 
     def test_llm_request_defaults(self) -> None:
         req = LLMRequest(
-            model="claude-sonnet-4-7",
+            model="claude-sonnet-4-6",
             system_blocks=(LLMSystemBlock(text="a"),),
             messages=(LLMMessage(role="user", content="hi"),),
         )
-        assert req.timeout_seconds == 30.0
+        assert req.timeout_seconds == 180.0
         assert req.temperature == 0.7
+
+    def test_llm_request_default_timeout_is_180(self) -> None:
+        """對應 change fix-default-model-and-timeouts: default timeout=180s."""
+        req = LLMRequest(
+            model="x",
+            system_blocks=(),
+            messages=(),
+        )
+        assert req.timeout_seconds == 180.0
 
     def test_response_cache_metadata(self) -> None:
         cache = CacheMetadata(cache_read_input_tokens=123, cache_creation_input_tokens=0)

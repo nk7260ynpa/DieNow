@@ -75,7 +75,7 @@ class ClaudeCLIClient:
         *,
         cli_path: str | None = None,
         claude_home: Any = None,  # 相容用; 2026-04-18 後已不再驗證.
-        timeout_seconds: float = 30.0,
+        timeout_seconds: float = 180.0,
         output_format: str = "stream-json",
         skip_startup_checks: bool = False,
     ) -> None:

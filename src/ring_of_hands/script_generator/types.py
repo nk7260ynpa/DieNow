@@ -95,11 +95,11 @@ class ScriptConfig(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    model: str = "claude-sonnet-4-7"
+    model: str = "claude-sonnet-4-6"
     max_retries: int = 3
     max_tokens: int = 4096
     temperature: float = 0.7
-    llm_timeout_seconds: float = 30.0
+    llm_timeout_seconds: float = 180.0
 
 
 __all__ = [
