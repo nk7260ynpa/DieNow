@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from ring_of_hands.llm.fake_client import FakeAnthropicClient
+from ring_of_hands.llm.fake_client import FakeLLMClient
 from ring_of_hands.project_agent.agent import ProjectAgent
 from ring_of_hands.script_generator.types import Persona, Script, ScriptEvent
 
@@ -37,13 +37,13 @@ def pov6_prior_life() -> Script:
 
 
 @pytest.fixture
-def fake_client() -> FakeAnthropicClient:
-    return FakeAnthropicClient()
+def fake_client() -> FakeLLMClient:
+    return FakeLLMClient()
 
 
 @pytest.fixture
 def agent(
-    fake_client: FakeAnthropicClient, pov6_prior_life: Script
+    fake_client: FakeLLMClient, pov6_prior_life: Script
 ) -> ProjectAgent:
     return ProjectAgent(
         llm_client=fake_client,

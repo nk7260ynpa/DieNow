@@ -29,7 +29,13 @@ class WorldConfig(BaseModel):
 
 
 class ScenarioConfig(BaseModel):
-    """整個關卡執行流程的設定."""
+    """整個關卡執行流程的設定.
+
+    本 change (`migrate-to-claude-cli-subprocess`) 新增 CLI-backend 專屬
+    欄位 `cli_path` / `claude_home`; `llm_client` 由 `"anthropic"` 改為
+    `"claude_cli"` 作為生產後端的合法 literal. `anthropic_api_key` 欄位
+    保留為相容欄位, 但新程式碼不再使用.
+    """
 
     model_config = ConfigDict(frozen=True)
 
@@ -43,14 +49,22 @@ class ScenarioConfig(BaseModel):
     enable_realtime_chat: bool = True
     llm_timeout_seconds: float = Field(gt=0.0, default=30.0)
 
-    llm_client: Literal["anthropic", "fake"] = "anthropic"
+    llm_client: Literal["claude_cli", "fake"] = "claude_cli"
     project_agent_model: str = "claude-sonnet-4-7"
-    anthropic_api_key: str | None = None  # 自 .env 注入
+
+    # Claude CLI 相關設定.
+    cli_path: str = "claude"
+    claude_home: str = "~/.claude"
+
+    # 向後相容保留欄位; 本 change 後不再使用 Anthropic SDK.
+    anthropic_api_key: str | None = None
 
     dry_run_fixture_path: Path = Path("tests/fixtures/dry_run.yaml")
     dry_run: bool = False
 
-    issues_md_path: Path = Path("openspec/changes/recreate-duannao-ring-of-hands/issues.md")
+    issues_md_path: Path = Path(
+        "openspec/changes/migrate-to-claude-cli-subprocess/issues.md"
+    )
 
     @field_validator("pov1_to_5_personas")
     @classmethod

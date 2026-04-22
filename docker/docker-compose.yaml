@@ -4,6 +4,11 @@ services:
     build:
       context: ..
       dockerfile: docker/Dockerfile
+    # env_file 會把 `.env` 內所有變數注入容器環境, 其中包含
+    # `CLAUDE_CODE_OAUTH_TOKEN` — 容器內的 `claude` CLI 讀取此 env 後
+    # 即可承繼 Max 訂閱身份. 2026-04-18 起不再 mount `~/.claude`:
+    # macOS Keychain 內的 token 無法跨到 Linux 容器, 且 `claude setup-token`
+    # 產生的 long-lived token 透過 env 注入已足夠.
     env_file:
       - ../.env
     environment:

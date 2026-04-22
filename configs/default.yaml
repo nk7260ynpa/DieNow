@@ -37,11 +37,18 @@ enable_realtime_chat: true
 # LLM 呼叫 timeout (秒).
 llm_timeout_seconds: 30
 
-# LLM client 類型: "anthropic" 或 "fake".
-llm_client: "anthropic"
+# LLM client 類型: "claude_cli" (走 Claude Code CLI subprocess) 或 "fake".
+# 由 change `migrate-to-claude-cli-subprocess` 起, 已移除 Anthropic SDK backend;
+# 本欄位填 "anthropic" 會被 config_loader 自動改為 "claude_cli".
+llm_client: "claude_cli"
 
 # Project agent 模型 (亦可由環境變數 PROJECT_AGENT_MODEL 覆寫).
+# 空字串代表走 CLI 預設模型.
 project_agent_model: "claude-sonnet-4-7"
+
+# Claude CLI 相關 (可由 env 覆寫).
+cli_path: "claude"
+claude_home: "~/.claude"
 
 # Dry-run fixture 路徑 (`--dry-run` 時載入).
 dry_run_fixture_path: "tests/fixtures/dry_run.yaml"

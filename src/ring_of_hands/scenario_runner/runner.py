@@ -1,5 +1,9 @@
 """ScenarioRunner: 整合 script_generator / world_engine / pov_manager /
 project_agent 為完整關卡主流程.
+
+本 change (`migrate-to-claude-cli-subprocess`) 將生產後端由 Anthropic SDK
+改為 Claude Code CLI subprocess (`ClaudeCLIClient`). `llm_client` 為
+`"claude_cli"` 時建立 `ClaudeCLIClient`; 為 `"fake"` 時建立 `FakeLLMClient`.
 """
 
 from __future__ import annotations
@@ -11,11 +15,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from ring_of_hands.llm.base import LLMClient, LLMResponse
-from ring_of_hands.llm.fake_client import FakeAnthropicClient, FakeClientFixture
+from ring_of_hands.llm.base import (
+    ConfigValidationError as _ConfigError,
+    LLMClient,
+    LLMResponse,
+)
+from ring_of_hands.llm.fake_client import FakeClientFixture, FakeLLMClient
 from ring_of_hands.pov_manager.manager import PovManager
 from ring_of_hands.project_agent.agent import (
-    ConfigValidationError as _PAConfigError,
     LLMUnavailableError,
     ProjectAgent,
 )
@@ -36,7 +43,6 @@ from ring_of_hands.world_model.types import (
     OutcomeEvent,
     ScriptGenerationFailedEvent,
     SpeakAction,
-    WaitAction,
 )
 
 
@@ -111,15 +117,17 @@ class ScenarioRunner:
         metrics = _MetricsAggregator()
 
         logger.info(
-            "scenario_runner: 開始關卡 (events=%s, run_log=%s)",
+            "scenario_runner: 開始關卡 (events=%s, run_log=%s, llm_client=%s, model=%s)",
             events_path,
             run_log_path,
+            self._config.llm_client,
+            self._config.project_agent_model,
         )
 
         # --- 建立 LLMClient & ProjectAgent ---
         try:
             base_client = self._build_llm_client()
-        except (_PAConfigError, FileNotFoundError) as exc:
+        except (_ConfigError, FileNotFoundError) as exc:
             logger.error("LLMClient 建立失敗: %s", exc)
             outcome = Outcome(result="FAIL", cause="config_invalid", tick=0)
             event_log.append(
@@ -218,12 +226,9 @@ class ScenarioRunner:
 
         # 注入 prior_life summaries 供 observe 使用.
         for pov_id, summary in manager.prior_life_summaries().items():
-            # private 更新: engine._prior_life_summaries 以 property-less 方式.
             engine._prior_life_summaries[pov_id] = summary  # type: ignore[attr-defined]
 
         def _realtime_chat_hook(speaker_id, action: SpeakAction):
-            # 回傳 list[Event]: 轉發到 pov_manager 產生的 events.
-            # 針對 action.targets 中所有 k<6 的 pov 都要問一次.
             events = []
             for target in action.targets:
                 if 1 <= target <= 5:
@@ -243,7 +248,6 @@ class ScenarioRunner:
             for tick in range(1, self._config.max_ticks + 1):
                 engine.advance_tick()
                 if engine.state.tick != tick:
-                    # advance_tick 自動遞增一次; 這是 defensive check.
                     break
                 manager.sync_alive_flags()
 
@@ -275,7 +279,6 @@ class ScenarioRunner:
                 if engine.outcome is not None:
                     break
 
-                # Post-tick.
                 outcome = post_tick_checks(
                     engine, max_ticks=self._config.max_ticks
                 )
@@ -285,7 +288,6 @@ class ScenarioRunner:
             if engine.outcome is not None:
                 final_outcome = engine.outcome
             elif final_outcome is None:
-                # Fallback: timeout.
                 final_outcome = Outcome(
                     result="FAIL",
                     cause="timeout",
@@ -337,10 +339,15 @@ class ScenarioRunner:
                 fixture = FakeClientFixture.from_yaml(
                     self._config.dry_run_fixture_path
                 )
-            return FakeAnthropicClient(fixture)
-        from ring_of_hands.llm.anthropic_client import AnthropicClient
+            return FakeLLMClient(fixture)
+        # 生產後端: Claude Code CLI subprocess.
+        from ring_of_hands.llm.claude_cli_client import ClaudeCLIClient
 
-        return AnthropicClient(api_key=self._config.anthropic_api_key)
+        return ClaudeCLIClient(
+            cli_path=self._config.cli_path,
+            claude_home=self._config.claude_home,
+            timeout_seconds=self._config.llm_timeout_seconds,
+        )
 
     def _generate_scripts(self, llm_client: LLMClient):
         script_cfg = ScriptConfig(

@@ -1,14 +1,15 @@
-"""Script 生成失敗 → 寫 issues.md, CLI 非零退出."""
+"""Script 生成失敗 → 寫 issues.md, CLI 非零退出.
+
+本 change (`migrate-to-claude-cli-subprocess`) 後, 生成失敗改為 LLM 回傳
+非 JSON 文字而觸發 retry 耗盡 (不再是 Anthropic tool_use.input 驗證錯誤).
+"""
 
 from __future__ import annotations
 
-import shutil
 from pathlib import Path
 
-import pytest
-
 from ring_of_hands.llm.base import LLMResponse
-from ring_of_hands.llm.fake_client import FakeAnthropicClient
+from ring_of_hands.llm.fake_client import FakeLLMClient
 from ring_of_hands.scenario_runner.config_loader import load_config
 from ring_of_hands.scenario_runner.runner import ScenarioRunner
 
@@ -19,16 +20,14 @@ CONFIGS_DIR = REPO_ROOT / "configs"
 
 class TestScriptGenerationFailure:
     def test_invalid_scripts_fail_and_write_issues(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+        self, tmp_path: Path
     ) -> None:
-        # FakeAnthropicClient 對所有 script_generation 請求都回無效 tool_use.
-        client = FakeAnthropicClient()
+        # FakeLLMClient 對所有 script_generation 請求都回非 JSON 文字.
+        client = FakeLLMClient()
         for _ in range(10):
             client.add_script_response(
                 1,
-                LLMResponse(
-                    text="", tool_use={"name": "wrong_tool", "input": {}}
-                ),
+                LLMResponse(text="I'm unable to produce a script."),
             )
         # issues.md 重導向 tmp_path 以免污染 repo.
         issues_md = tmp_path / "issues.md"
@@ -37,7 +36,6 @@ class TestScriptGenerationFailure:
             CONFIGS_DIR / "default.yaml",
             personas_path=CONFIGS_DIR / "personas.yaml",
             dry_run=True,
-            env_overrides={"ANTHROPIC_API_KEY": ""},
         )
         # Override issues_md_path.
         config_dict = config.model_dump()

@@ -1,82 +1,47 @@
 """Script 生成的 prompt 組裝器.
 
-將 persona / 世界環境 / prior_life 組裝成 `LLMRequest`, 並對可重用部分
- (persona, 世界環境, prior_life) 附加 cache_control.
+將 persona / 世界環境 / prior_life 組裝成 `LLMRequest`, 並要求 LLM 以嚴格
+JSON 物件格式輸出 `Script`.
+
+本 change (`migrate-to-claude-cli-subprocess`) 將 structured output 由
+Anthropic tool use 降級為「prompt 誘導 JSON」; 故:
+- 移除 `PRODUCE_SCRIPT_TOOL` 常數與所有 tool-use 欄位.
+- user prompt 末尾附上 `Script` JSON schema 範本與「僅輸出 JSON」指示.
+- system_blocks 仍為 3-block 結構 (world_env / persona / prior_life) 以
+  保留日後恢復 caching 的彈性; `cache` 欄位保留但 `ClaudeCLIClient` 忽略.
 """
 
 from __future__ import annotations
 
 import json
-from typing import Any
 
 from ring_of_hands.llm.base import (
     LLMMessage,
     LLMRequest,
     LLMSystemBlock,
-    LLMToolDefinition,
 )
 from ring_of_hands.script_generator.types import Persona, Script, ScriptConfig
 
 
-# Anthropic tool 定義: 要求 LLM 以此 tool 輸出結構化 Script.
-PRODUCE_SCRIPT_TOOL: LLMToolDefinition = LLMToolDefinition(
-    name="produce_script",
-    description=(
-        "輸出單一 pov 的閉環劇本. 必須符合 Script schema: pov_id / persona / "
-        "events / death_cause. events 需按 t 非遞減排序, 最後一個 event 必為 "
-        "actor=pov_id, action_type=die."
-    ),
-    input_schema={
-        "type": "object",
-        "properties": {
-            "pov_id": {"type": "integer", "minimum": 1, "maximum": 5},
-            "persona": {
-                "type": "object",
-                "properties": {
-                    "name": {"type": "string"},
-                    "description": {"type": "string"},
-                    "traits": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                    },
-                },
-                "required": ["name"],
-            },
-            "events": {
-                "type": "array",
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "t": {"type": "integer", "minimum": 0},
-                        "actor": {"type": "integer", "minimum": 1, "maximum": 6},
-                        "action_type": {
-                            "type": "string",
-                            "enum": [
-                                "move",
-                                "speak",
-                                "press",
-                                "touch_ring",
-                                "observe",
-                                "wait",
-                                "die",
-                            ],
-                        },
-                        "payload": {"type": "object"},
-                        "targets": {
-                            "type": "array",
-                            "items": {"type": "integer"},
-                        },
-                    },
-                    "required": ["t", "actor", "action_type"],
-                },
-            },
-            "death_cause": {
-                "type": "string",
-                "enum": ["press_wrong", "ring_paradox", "timeout", "other"],
-            },
-        },
-        "required": ["pov_id", "persona", "events", "death_cause"],
-    },
+_SCRIPT_JSON_SCHEMA_HINT = (
+    "\n\n## 輸出格式要求\n"
+    "請直接輸出一個 JSON 物件 (不要附加解釋文字; 不要使用 Markdown code fence).\n"
+    "該 JSON 物件 MUST 符合以下 Script schema:\n"
+    "```\n"
+    "{\n"
+    '  "pov_id": <integer 1..5>,\n'
+    '  "persona": {"name": "...", "description": "...", "traits": ["..."]},\n'
+    '  "events": [\n'
+    '    {"t": <int>, "actor": <1..6>, "action_type": "move|speak|press|touch_ring|observe|wait|die", '
+    '"payload": {...}, "targets": [<int>, ...]},\n'
+    "    ...\n"
+    "  ],\n"
+    '  "death_cause": "press_wrong|ring_paradox|timeout|other"\n'
+    "}\n"
+    "```\n"
+    "- events 需按 t 非遞減排序; 最後一個 event 必為 actor=pov_id, action_type=die.\n"
+    "- 若此 pov 有前世記憶, 你 MUST 忠實重現前世中涉及此 pov 的互動事件 (相同 t / 相同 payload / 相同 targets).\n"
+    "- 僅輸出 JSON, 勿加任何其他文字."
 )
 
 
@@ -110,7 +75,7 @@ def build_world_environment_block(
             "- 可用 action: move(delta), speak(msg, targets), press(button_id),",
             "  touch_ring, observe, wait, die",
             "## 你的任務",
-            "- 以 `produce_script` tool 輸出給定 pov 的完整生命週期.",
+            "- 為給定 pov 撰寫完整生命週期的劇本 (events).",
             "- events 需按 t 非遞減排序; 最後一個 event 必為 actor=pov_id, action_type=die.",
             "- 若該 pov 有前世記憶, 你 MUST 忠實重現前世中的互動 (尤其是與自己前一",
             "  世對話或互動的事件), 不可修改任何座標、訊息文字或時機.",
@@ -173,6 +138,8 @@ def build_script_request(
     persona_block_text = build_persona_block(persona, pov_id)
     prior_life_block_text = build_prior_life_block(prior_life)
 
+    # 3-block system 結構: world_env / persona / prior_life. `cache` 欄位
+    # 保留為 informational metadata; `ClaudeCLIClient` 會忽略.
     system_blocks: list[LLMSystemBlock] = [
         LLMSystemBlock(text=world_env_block, cache=True, label="world_env"),
         LLMSystemBlock(text=persona_block_text, cache=True, label="persona"),
@@ -180,13 +147,14 @@ def build_script_request(
     ]
 
     user_text = (
-        f"請為 pov_{pov_id} 撰寫完整劇本, 以 `produce_script` tool 回傳."
+        f"請為 pov_{pov_id} 撰寫完整劇本, 並以 JSON 物件回傳."
     )
     if retry_feedback:
         user_text += (
             "\n\n上一次嘗試有問題, 需要修正. 修正提示:\n"
             f"{retry_feedback}"
         )
+    user_text += _SCRIPT_JSON_SCHEMA_HINT
 
     messages = (LLMMessage(role="user", content=user_text),)
 
@@ -195,8 +163,8 @@ def build_script_request(
         system_blocks=tuple(system_blocks),
         messages=messages,
         max_tokens=config.max_tokens,
-        tools=(PRODUCE_SCRIPT_TOOL,),
-        tool_choice={"type": "tool", "name": "produce_script"},
+        tools=(),
+        tool_choice=None,
         temperature=config.temperature,
         timeout_seconds=config.llm_timeout_seconds,
         metadata={"purpose": "script_generation", "pov_id": pov_id},
@@ -204,7 +172,6 @@ def build_script_request(
 
 
 __all__ = [
-    "PRODUCE_SCRIPT_TOOL",
     "build_persona_block",
     "build_prior_life_block",
     "build_script_request",

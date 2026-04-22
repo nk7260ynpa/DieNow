@@ -26,14 +26,45 @@ def _personas() -> tuple[Persona, ...]:
 
 class TestScenarioConfig:
     def test_defaults(self) -> None:
+        """預設值: llm_client=claude_cli, cli_path=claude, claude_home=~/.claude."""
         cfg = ScenarioConfig(
             world=_world(),
             pov1_to_5_personas=_personas(),
             pov6_persona=Persona(name="agent"),
         )
         assert cfg.max_ticks == 50
-        assert cfg.llm_client == "anthropic"
+        assert cfg.llm_client == "claude_cli"
+        assert cfg.cli_path == "claude"
+        assert cfg.claude_home == "~/.claude"
         assert cfg.dry_run is False
+
+    def test_claude_cli_literal_accepted(self) -> None:
+        cfg = ScenarioConfig(
+            world=_world(),
+            pov1_to_5_personas=_personas(),
+            pov6_persona=Persona(name="agent"),
+            llm_client="claude_cli",
+        )
+        assert cfg.llm_client == "claude_cli"
+
+    def test_fake_literal_accepted(self) -> None:
+        cfg = ScenarioConfig(
+            world=_world(),
+            pov1_to_5_personas=_personas(),
+            pov6_persona=Persona(name="agent"),
+            llm_client="fake",
+        )
+        assert cfg.llm_client == "fake"
+
+    def test_anthropic_literal_rejected(self) -> None:
+        """本 change 移除 Anthropic SDK backend, 型別不再接受此 literal."""
+        with pytest.raises(ValidationError):
+            ScenarioConfig(
+                world=_world(),
+                pov1_to_5_personas=_personas(),
+                pov6_persona=Persona(name="agent"),
+                llm_client="anthropic",  # type: ignore[arg-type]
+            )
 
     def test_personas_length(self) -> None:
         with pytest.raises(ValidationError):

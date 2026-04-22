@@ -1,10 +1,15 @@
-# Dry-run fixture for FakeAnthropicClient.
+# Dry-run fixture for FakeLLMClient.
+#
+# 本檔由 `FakeLLMClient` 載入; 在 change `migrate-to-claude-cli-subprocess`
+# 之後, script 與 action 以 `LLMResponse.text = json.dumps(script|action)`
+# 形式承載 (不再使用 Anthropic tool_use).
 #
 # 結構:
-#   scripts: pov_1 ~ pov_5 的預錄劇本. prior_life 由 FakeAnthropicClient
-#       自動接上 (每個 pov_n 的 prior_life 會在 generate_all 時 attach 上
-#       script_{n-1} 的完整結構).
-#   project_agent_actions: pov_6 每個 tick 的預錄 action (循序取用).
+#   scripts: pov_1 ~ pov_5 的預錄劇本 (dict; 會被 FakeLLMClient 序列化為
+#       LLMResponse.text JSON 字串). prior_life 由 ScriptGenerator 於
+#       generate_all 時自動接上 script_{n-1}.
+#   project_agent_actions: pov_6 每個 tick 的預錄 action dict (循序取用;
+#       亦會被序列化為 LLMResponse.text JSON 字串).
 #   realtime_replies: 即時對話預錄回應 (key=pov_id, value=字串清單).
 #
 # 本 fixture 為 happy path (WIN).

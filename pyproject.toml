@@ -13,7 +13,6 @@ authors = [
     { name = "DieNow Project" },
 ]
 dependencies = [
-    "anthropic>=0.39.0",
     "pydantic>=2.7",
     "pyyaml>=6.0",
     "structlog>=24.1.0",

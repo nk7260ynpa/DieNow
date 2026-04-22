@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from ring_of_hands.llm.fake_client import FakeAnthropicClient, FakeClientFixture
+from ring_of_hands.llm.fake_client import FakeClientFixture, FakeLLMClient
 from ring_of_hands.scenario_runner.config_loader import load_config
 from ring_of_hands.scenario_runner.runner import ScenarioRunner
 from ring_of_hands.world_model.types import TouchRingAction
