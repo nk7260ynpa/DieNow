@@ -96,3 +96,32 @@ The system SHALL 以介面 `LLMClient` 抽象所有 LLM 呼叫；生產環境使
 - **THEN** system MUST raise `ConfigValidationError` 並在 `run.sh` 結束前提示使用者
 - **AND** 不呼叫任何 LLM 端點
 
+### Requirement: ScriptGeneratorConfig 預設值鎖定
+
+The system SHALL 保證 `ScriptGeneratorConfig` 在未顯式指定欄位時，預設值
+為：
+
+- `model = "claude-sonnet-4-6"`
+- `llm_timeout_seconds = 180.0`
+
+此預設值反映 2026-04 Anthropic 服務上實際存在的 Sonnet 4.X 模型名稱，以
+及 pov_1 劇本生成的實測延遲上界（60–180 秒）。對應的 baseline
+「LLM 呼叫介面抽象」Requirement 未變，Script generation 仍透過 `LLMClient`
+介面委派。
+
+#### Scenario: 無參建立 ScriptGeneratorConfig 採用預設模型
+
+- **WHEN** 呼叫 `ScriptGeneratorConfig()`（不傳任何欄位）
+- **THEN** `config.model == "claude-sonnet-4-6"`
+
+#### Scenario: 無參建立 ScriptGeneratorConfig 採用預設 timeout
+
+- **WHEN** 呼叫 `ScriptGeneratorConfig()`（不傳任何欄位）
+- **THEN** `config.llm_timeout_seconds == 180.0`
+
+#### Scenario: 顯式覆寫 timeout 不受預設影響
+
+- **WHEN** 呼叫 `ScriptGeneratorConfig(llm_timeout_seconds=90.0)`
+- **THEN** `config.llm_timeout_seconds == 90.0`
+- **AND** `config.model == "claude-sonnet-4-6"`（未傳的欄位仍採預設）
+
